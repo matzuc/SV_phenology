@@ -1,0 +1,178 @@
+---
+title: "perliminary cluster"
+author: "mz"
+format: html
+editor: source
+---
+
+## Libraries
+
+load the packages needed for downloading the data
+
+```{r}
+
+
+library(dplyr)
+library(tidync)
+library(lubridate)
+library(factoextra)
+```
+
+load credentials
+
+
+```{r}
+# read cred file ingoring row names
+
+
+cred <- read.csv(here::here('data/credentials.csv'), sep = ";")
+
+user <- cred$user
+pss <- cred$pss
+
+```
+
+https://data.marine.copernicus.eu/product/OCEANCOLOUR_GLO_BGC_L4_MY_009_108/download?dataset=c3s_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M
+
+```{r}
+scriptGEN <- 'python -m motuclient --motu https://my.cmems-du.eu/motu-web/Motu --service-id OCEANCOLOUR_GLO_BGC_L4_MY_009_108-TDS --product-id c3s_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M --longitude-min 9.040168526785713 --longitude-max 30.73657299107142 --latitude-min 73.16886401367186 --latitude-max 87.23134838867186 --date-min "2022-06-01 00:00:00" --date-max "2022-06-01 23:59:59" --variable CHL --variable CHL_count --variable CHL_error --out-dir <OUTPUT_DIRECTORY> --out-name <OUTPUT_FILENAME> --user <USERNAME> --pwd <PASSWORD> '
+```
+
+
+
+
+```{r}
+cfg <- parse.CMEMS.script(scriptGEN)
+cfg2 <- update(cfg,user= user, pwd =pss, out.dir = "data/")
+#cfg2
+```
+
+
+# run the download script
+
+define download periods
+
+```{r}
+downgrid <- expand.grid(year = c(2000:2022), mmin = 3, mmax = 9)
+#downgrid <- rbind(downgrid, data.frame(year = 2022, mmin = 3, mmax = 6))
+# downgrid <- rbind(downgrid, data.frame(year = 2021, mmin = 7, mmax = 9))
+
+```
+
+actually run the script and convert it to geotif
+
+
+```{r}
+
+ for(i in 1:nrow(downgrid)){
+    y <- downgrid$year[i]
+    mmin <- downgrid$mmin[i]  
+    mmax <- downgrid$mmax[i]  
+    
+    
+      
+      date.min <- paste0(y, "-0", mmin, "-01 00:00:00")
+      date.max <- paste0(y, "-0", mmax, "-01 00:00:00")
+      out.name <- paste0("OCEANCOLOUR_ARC_CHL_L4_", y, ".nc")
+      longMax <- "50"
+      longMin <- "-10"
+      latMax <- "85"
+      latMin <- "72"
+      out.dir <- "data/chl_4km_nc"
+      
+      
+      
+      cfg3 <- update(cfg2, 
+                     date.min = date.min,
+                     date.max = date.max,
+                     out.name = out.name,
+                     longitude.max = longMax,
+                     longitude.min = longMin,
+                     latitude.max = latMax,
+                     latitude.min = latMin,
+                     out.dir = out.dir)
+        
+      
+      
+      CMEMS.download(cfg3)
+      
+      
+      br <- brick(here::here(out.dir, out.name))
+      setZ(br, as.Date(paste0(y, "-", mmin:mmax, "-01")), "Date")
+      
+      
+      
+      writeRaster(br, here::here('data','chl_4km_tif', 
+                                 paste0("OCEANCOLOUR_ARC_CHL_L4_", y, ".tif")
+      ), overwrite = T)
+      
+      
+      rm(br)
+      print(paste(y))
+      }
+
+```
+
+
+andrà integrato con i dati giornalieri
+
+```{r}
+downgrid <- expand.grid(year = c(2022), mmin = 3, mmax = 6)
+
+
+```
+
+actually run the script for 2022 (partial coverage)
+
+
+```{r}
+
+ for(i in 1:nrow(downgrid)){
+    y <- downgrid$year[i]
+    mmin <- downgrid$mmin[i]  
+    mmax <- downgrid$mmax[i]  
+    
+    
+      
+      date.min <- paste0(y, "-0", mmin, "-01 00:00:00")
+      date.max <- paste0(y, "-0", mmax, "-01 00:00:00")
+      out.name <- paste0("OCEANCOLOUR_ARC_CHL_L4_partial_", y, ".nc")
+      longMax <- "50"
+      longMin <- "-10"
+      latMax <- "85"
+      latMin <- "72"
+      out.dir <- "data/chl_1km_nc"
+      
+      
+      
+      cfg3 <- update(cfg2, 
+                     date.min = date.min,
+                     date.max = date.max,
+                     out.name = out.name,
+                     longitude.max = longMax,
+                     longitude.min = longMin,
+                     latitude.max = latMax,
+                     latitude.min = latMin,
+                     out.dir = out.dir)
+        
+      
+      
+      CMEMS.download(cfg3)
+      
+      
+      br <- brick(here::here(out.dir, out.name))
+      setZ(br, as.Date(paste0(y, "-", mmin:mmax, "-01")), "Date")
+      
+      
+      
+      writeRaster(br, here::here('data','chl_1km_tif', 
+                                 paste0("OCEANCOLOUR_ARC_CHL_L4_partial_", y, ".tif")
+      ), overwrite = T)
+      
+      
+      rm(br)
+      print(paste(y))
+      }
+
+```
+
