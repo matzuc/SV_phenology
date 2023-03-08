@@ -23,30 +23,21 @@ load credentials
 # read cred file ingoring row names
 
 
-cred <- read.csv(here::here('data/credentials.csv'), sep = ";", row.names = F)
+cred <- read.csv(here::here('data/credentials.csv'), sep = ";")
 
 user <- cred$user
 pss <- cred$pss
 
 ```
 
-```{r}
-
-```
-(raw) Script to download files
+https://data.marine.copernicus.eu/product/OCEANCOLOUR_GLO_BGC_L4_MY_009_108/download?dataset=c3s_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M
 
 ```{r}
-scriptGEN <- 'python -m motuclient --motu https://my.cmems-du.eu/motu-web/Motu --service-id OCEANCOLOUR_ARC_BGC_L4_MY_009_124-TDS --product-id cmems_obs-oc_arc_bgc-plankton_my_l4-multi-1km_P1M --longitude-min 2 --longitude-max 39.2 --latitude-min 72 --latitude-max 85 --date-min "2021-03-01 00:00:00" --date-max "2021-09-01 00:00:00"  --variable CHL   --out-dir <OUTPUT_DIRECTORY> --out-name <OUTPUT_FILENAME> --user <USERNAME> --pwd <PASSWORD> '
+scriptGEN <- 'python -m motuclient --motu https://my.cmems-du.eu/motu-web/Motu --service-id OCEANCOLOUR_GLO_BGC_L4_MY_009_108-TDS --product-id c3s_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M --longitude-min 9.040168526785713 --longitude-max 30.73657299107142 --latitude-min 73.16886401367186 --latitude-max 87.23134838867186 --date-min "2022-06-01 00:00:00" --date-max "2022-06-01 23:59:59" --variable CHL --variable CHL_count --variable CHL_error --out-dir <OUTPUT_DIRECTORY> --out-name <OUTPUT_FILENAME> --user <USERNAME> --pwd <PASSWORD> '
 ```
 
 
 
-
-
-old script:
-python -m motuclient --motu https://my.cmems-du.eu/motu-web/Motu --service-id OCEANCOLOUR_ARC_CHL_L4_REP_OBSERVATIONS_009_088-TDS --product-id dataset-oc-arc-chl-multi_cci-l4-chl_1km_monthly-rep-v02 --longitude-min 2 --longitude-max 39.2 --latitude-min 72 --latitude-max 85 --date-min "2021-03-01 00:00:00" --date-max "2021-09-01 00:00:00"  --variable CHL   --out-dir <OUTPUT_DIRECTORY> --out-name <OUTPUT_FILENAME> --user <USERNAME> --pwd <PASSWORD> 
-
-adjust the script with credentials and other relevant infos
 
 ```{r}
 cfg <- parse.CMEMS.script(scriptGEN)
@@ -60,7 +51,7 @@ cfg2 <- update(cfg,user= user, pwd =pss, out.dir = "data/")
 define download periods
 
 ```{r}
-downgrid <- expand.grid(year = c(1998:2021), mmin = 3, mmax = 9)
+downgrid <- expand.grid(year = c(2000:2022), mmin = 3, mmax = 9)
 #downgrid <- rbind(downgrid, data.frame(year = 2022, mmin = 3, mmax = 6))
 # downgrid <- rbind(downgrid, data.frame(year = 2021, mmin = 7, mmax = 9))
 
@@ -85,7 +76,7 @@ actually run the script and convert it to geotif
       longMin <- "-10"
       latMax <- "85"
       latMin <- "72"
-      out.dir <- "data/chl_1km_nc"
+      out.dir <- "data/chl_4km_nc"
       
       
       
@@ -109,7 +100,7 @@ actually run the script and convert it to geotif
       
       
       
-      writeRaster(br, here::here('data','chl_1km_tif', 
+      writeRaster(br, here::here('data','chl_4km_tif', 
                                  paste0("OCEANCOLOUR_ARC_CHL_L4_", y, ".tif")
       ), overwrite = T)
       
