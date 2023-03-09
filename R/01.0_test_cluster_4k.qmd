@@ -13,9 +13,10 @@ load the packages needed for downloading the data
 
 
 library(dplyr)
-library(tidync)
+library(ncdf4)
 library(lubridate)
 library(factoextra)
+library(purrr)
 ```
 
 load credentials
@@ -25,154 +26,58 @@ load credentials
 # read cred file ingoring row names
 
 
-cred <- read.csv(here::here('data/credentials.csv'), sep = ";")
-
-user <- cred$user
-pss <- cred$pss
+nc_folder <-   here::here('data/chl_4km_nc')
 
 ```
 
-https://data.marine.copernicus.eu/product/OCEANCOLOUR_GLO_BGC_L4_MY_009_108/download?dataset=c3s_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M
-
 ```{r}
-scriptGEN <- 'python -m motuclient --motu https://my.cmems-du.eu/motu-web/Motu --service-id OCEANCOLOUR_GLO_BGC_L4_MY_009_108-TDS --product-id c3s_obs-oc_glo_bgc-plankton_my_l4-multi-4km_P1M --longitude-min 9.040168526785713 --longitude-max 30.73657299107142 --latitude-min 73.16886401367186 --latitude-max 87.23134838867186 --date-min "2022-06-01 00:00:00" --date-max "2022-06-01 23:59:59" --variable CHL --variable CHL_count --variable CHL_error --out-dir <OUTPUT_DIRECTORY> --out-name <OUTPUT_FILENAME> --user <USERNAME> --pwd <PASSWORD> '
-```
+# Create a file pattern to match the NetCDF files you want to read
+nc_pattern <- "*.nc"
 
 
+# Find all NetCDF files in the folder that match the pattern
+nc_files <- list.files(nc_folder, pattern = nc_pattern, full.names = TRUE)
 
+# Define a function to extract the 'CHL' variable from a single NetCDF file
+# Define a function to extract the 'CHL' variable and metadata from a single NetCDF file
+extract_chl <- function(nc_file) {
+  nc <- nc_open(nc_file)
+  chl <- ncvar_get(nc, "CHL")
+  time <- ncvar_get(nc, "time")
+  lon <- ncvar_get(nc, "longitude")
+  lat <- ncvar_get(nc, "latitude")
+  nc_close(nc)
+  return(list(chl = chl, time = time, lon = lon, lat = lat))
+}
 
-```{r}
-cfg <- parse.CMEMS.script(scriptGEN)
-cfg2 <- update(cfg,user= user, pwd =pss, out.dir = "data/")
-#cfg2
-```
+# Use lapply() to extract the 'CHL' variable and metadata from all NetCDF files
+chl_list <- lapply(nc_files, extract_chl)
 
+# Combine the data frames into a single data frame
+chl_data <- bind_rows(lapply(chl_list, function(x) {
+  data.frame(
+    chl = as.vector(x$chl),
+    time = as.POSIXct(x$time, origin = "1970-01-01"),
+    lon = as.vector(x$lon),
+    lat = as.vector(x$lat),
+    file = rep(nc_files, sapply(chl_list, function(y) nrow(y$chl)))
+  )
+}))
 
-# run the download script
+# Use lapply() to extract the 'CHL' variable from all NetCDF files
+chl_list <- lapply(nc_files, extract_chl)
 
-define download periods
+# Convert the list of arrays to a list of data frames
+chl_list <- lapply(chl_list, function(x) {
+  data.frame(chl = as.vector(x))
+})
 
-```{r}
-downgrid <- expand.grid(year = c(2000:2022), mmin = 3, mmax = 9)
-#downgrid <- rbind(downgrid, data.frame(year = 2022, mmin = 3, mmax = 6))
-# downgrid <- rbind(downgrid, data.frame(year = 2021, mmin = 7, mmax = 9))
+# Combine the data frames into a single data frame
+chl_data <- do.call(rbind, chl_list)
 
-```
+# Add a column to the data frame indicating the file that each row of data came from
+chl_data$file <- rep(nc_files, sapply(chl_list, nrow))
 
-actually run the script and convert it to geotif
-
-
-```{r}
-
- for(i in 1:nrow(downgrid)){
-    y <- downgrid$year[i]
-    mmin <- downgrid$mmin[i]  
-    mmax <- downgrid$mmax[i]  
-    
-    
-      
-      date.min <- paste0(y, "-0", mmin, "-01 00:00:00")
-      date.max <- paste0(y, "-0", mmax, "-01 00:00:00")
-      out.name <- paste0("OCEANCOLOUR_ARC_CHL_L4_", y, ".nc")
-      longMax <- "50"
-      longMin <- "-10"
-      latMax <- "85"
-      latMin <- "72"
-      out.dir <- "data/chl_4km_nc"
-      
-      
-      
-      cfg3 <- update(cfg2, 
-                     date.min = date.min,
-                     date.max = date.max,
-                     out.name = out.name,
-                     longitude.max = longMax,
-                     longitude.min = longMin,
-                     latitude.max = latMax,
-                     latitude.min = latMin,
-                     out.dir = out.dir)
-        
-      
-      
-      CMEMS.download(cfg3)
-      
-      
-      br <- brick(here::here(out.dir, out.name))
-      setZ(br, as.Date(paste0(y, "-", mmin:mmax, "-01")), "Date")
-      
-      
-      
-      writeRaster(br, here::here('data','chl_4km_tif', 
-                                 paste0("OCEANCOLOUR_ARC_CHL_L4_", y, ".tif")
-      ), overwrite = T)
-      
-      
-      rm(br)
-      print(paste(y))
-      }
-
-```
-
-
-andrà integrato con i dati giornalieri
-
-```{r}
-downgrid <- expand.grid(year = c(2022), mmin = 3, mmax = 6)
-
-
-```
-
-actually run the script for 2022 (partial coverage)
-
-
-```{r}
-
- for(i in 1:nrow(downgrid)){
-    y <- downgrid$year[i]
-    mmin <- downgrid$mmin[i]  
-    mmax <- downgrid$mmax[i]  
-    
-    
-      
-      date.min <- paste0(y, "-0", mmin, "-01 00:00:00")
-      date.max <- paste0(y, "-0", mmax, "-01 00:00:00")
-      out.name <- paste0("OCEANCOLOUR_ARC_CHL_L4_partial_", y, ".nc")
-      longMax <- "50"
-      longMin <- "-10"
-      latMax <- "85"
-      latMin <- "72"
-      out.dir <- "data/chl_1km_nc"
-      
-      
-      
-      cfg3 <- update(cfg2, 
-                     date.min = date.min,
-                     date.max = date.max,
-                     out.name = out.name,
-                     longitude.max = longMax,
-                     longitude.min = longMin,
-                     latitude.max = latMax,
-                     latitude.min = latMin,
-                     out.dir = out.dir)
-        
-      
-      
-      CMEMS.download(cfg3)
-      
-      
-      br <- brick(here::here(out.dir, out.name))
-      setZ(br, as.Date(paste0(y, "-", mmin:mmax, "-01")), "Date")
-      
-      
-      
-      writeRaster(br, here::here('data','chl_1km_tif', 
-                                 paste0("OCEANCOLOUR_ARC_CHL_L4_partial_", y, ".tif")
-      ), overwrite = T)
-      
-      
-      rm(br)
-      print(paste(y))
-      }
-
+# Do any further processing on the 'chl_data' here
 ```
 

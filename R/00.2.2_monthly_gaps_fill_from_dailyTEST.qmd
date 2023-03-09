@@ -1,0 +1,194 @@
+---
+title: "0.2_monthly_chla_download"
+author: "mz"
+format: html
+editor: source
+---
+
+## Libraries
+
+load the packages needed for downloading the data
+
+```{r}
+
+
+library(RCMEMS)
+library(raster)
+```
+
+load credentials
+
+
+```{r}
+# read cred file ingoring row names
+
+
+cred <- read.csv(here::here('data/credentials.csv'), sep = ";")
+
+user <- cred$user
+pss <- cred$pss
+
+```
+
+
+the test consists in downloading 1 month (4km, as the only one accessible right now) and try to combine them.
+
+
+
+(raw) Script to download files
+
+https://data.marine.copernicus.eu/product/OCEANCOLOUR_GLO_BGC_L3_MY_009_103/download?dataset=cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D
+
+
+```{r}
+scriptGEN <- 'python -m motuclient --motu https://my.cmems-du.eu/motu-web/Motu --service-id OCEANCOLOUR_GLO_BGC_L3_MY_009_103-TDS --product-id cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D --longitude-min 5.424101116071427 --longitude-max 31.138358258928566 --latitude-min 74.07288086635043 --latitude-max 88.53715050920758 --date-min "2022-06-01 00:00:00" --date-max "2022-06-30 23:59:59" --variable CHL --variable flags --out-dir <OUTPUT_DIRECTORY> --out-name <OUTPUT_FILENAME> --user <USERNAME> --pwd <PASSWORD>'
+```
+
+adjust the script with credentials and other relevant infos
+
+```{r}
+cfg <- parse.CMEMS.script(scriptGEN)
+cfg2 <- update(cfg,user= user, pwd =pss, out.dir = "data/")
+#cfg2
+```
+
+## test product
+
+Start the test with two days
+
+
+```{r}
+
+
+
+
+      date.min <- paste0(2022, "-0", 4, "-01 00:00:00")
+      date.max <- paste0(2022, "-0", 4, "-31 00:00:00")
+      out.name <- paste0("test_download_", "202204_4km", ".nc")
+      longMax <- "50"
+      longMin <- "-10"
+      latMax <- "85"
+      latMin <- "72"
+      
+      # latMax <- "60"
+      # latMin <- "50"
+
+      
+      out.dir <- "data/monthly_from_daily"
+      
+      
+      
+      cfg3 <- update(cfg2, 
+                     date.min = date.min,
+                     date.max = date.max,
+                     out.name = out.name,
+                     longitude.max = longMax,
+                     longitude.min = longMin,
+                     latitude.max = latMax,
+                     latitude.min = latMin,
+                     out.dir = out.dir)
+        
+      
+      
+      CMEMS.download(cfg3)
+      
+ 
+
+```
+
+
+the dataset start from sepotember 2022
+
+ems-du.eu/motu-web/Motu
+2023-03-09 11:36:01.711 [ERROR] 010-6 : The date range is invalid. Invalid date range: [2022-07-01 00:00:00,2022-07-02 23:59:59]. Valid range is: [2023-03-02 00:00:00,2023-03-07 00:00:00].
+[1] 0
+
+*incomprensibile*
+
+in realtà qualcosa dovrebbe esserci
+
+https://marine.copernicus.eu/user-corner/user-notification-service/oc-597-oceancolour-family-products-daily-datasets-incorrectly
+
+
+provo a scaricarlo con motu
+
+OCEANCOLOUR_ARC_BGC_L3_MY_009_123-TDS
+
+
+
+```{r}
+scriptGEN <- 'python -m motuclient --motu https://nrt.cmems-du.eu/motu-web/Motu --service-id OCEANCOLOUR_ARC_BGC_L3_MY_009_123-TDS --product-id cmems_obs-oc_arc_bgc-plankton_my_l3-multi-1km_P1D --longitude-min 7.834812723214284 --longitude-max 28.727646651785708 --latitude-min 70.67026187918526 --latitude-max 84.33096098632811 --date-min "2023-03-07 00:00:00" --date-max "2023-03-07 23:59:59" --variable CHL --variable flags --variable CHL_uncertainty --out-dir <OUTPUT_DIRECTORY> --out-name <OUTPUT_FILENAME> --user <USERNAME> --pwd <PASSWORD> '
+
+
+cfg <- parse.CMEMS.script(scriptGEN)
+cfg2 <- update(cfg,user= user, pwd =pss, out.dir = "data/")
+
+
+
+
+      date.min <- paste0(2022, "-0", 7, "-01 00:00:00")
+      date.max <- paste0(2022, "-0", 7, "-02 00:00:00")
+      out.name <- paste0("test_download_", 202205, ".nc")
+      longMax <- "50"
+      longMin <- "-10"
+      #latMax <- "85"
+      #latMin <- "72"
+      
+      latMax <- "60"
+      latMin <- "50"
+
+      
+      out.dir <- "data/monthly_from_daily"
+      
+      
+      
+      cfg3 <- update(cfg2, 
+                     date.min = date.min,
+                     date.max = date.max,
+                     out.name = out.name,
+                     longitude.max = longMax,
+                     longitude.min = longMin,
+                     latitude.max = latMax,
+                     latitude.min = latMin,
+                     out.dir = out.dir)
+        
+      
+      
+      CMEMS.download(cfg3)
+      
+ 
+
+```
+
+il servizio non sembra essere disponibile, provo a scaricarlo tramite opendap
+
+
+
+```{r}
+library(ncdf4)
+library(lubridate)
+
+
+
+server <- "@my.cmems-du.eu";                    # Copernicus Marine server
+datasetID <- "cmems_obs-oc_arc_bgc-plankton_my_l3-multi-1km_P1M" # datasetID
+
+USERNAME <- cred$user# readline("Enter your username: ")   # input your username
+PASSWORD <- cred$pss# readline("Enter your password: ")   # input your password
+
+```
+
+
+provo ad accedere al server OPENDAP
+
+```{r}
+# creates the OPeNDAP url
+url <- paste ("https://",USERNAME, ":", PASSWORD,  server,"/thredds/dodsC/",datasetID, sep = "")
+
+# Open the connection
+ds <- nc_open(url)   
+
+ds
+```
+
+
