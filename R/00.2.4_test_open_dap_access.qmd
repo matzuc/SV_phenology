@@ -1,0 +1,175 @@
+---
+title: "0.2_monthly_chla_download"
+author: "mz"
+format: html
+editor: source
+---
+
+## Libraries
+
+load the packages needed for downloading the data
+
+```{r}
+
+
+library(ncdf4)
+library(lubridate)
+
+```
+
+follow the instructions at:
+https://help.marine.copernicus.eu/en/articles/6740888-how-to-access-and-subset-a-dataset-via-opendap-with-r
+
+*this script need to run with R < 3.6.1*
+
+```{r}
+sessionInfo()
+```
+
+
+### load credentials
+
+
+```{r}
+# read cred file ingoring row names
+
+
+cred <- read.csv(here::here('data/credentials.csv'), sep = ";")
+
+user <- cred[1,1]
+pss <- cred$pss
+
+```
+
+## product
+
+not all data are currently (2023-03-10) available through MOTU
+
+
+https://marine.copernicus.eu/user-corner/user-notification-service/oc-597-oceancolour-family-products-daily-datasets-incorrectly
+
+so, I try to access the dataset with OpenDAP
+
+
+
+
+(raw) Script to download files
+
+https://data.marine.copernicus.eu/product/OCEANCOLOUR_GLO_BGC_L3_MY_009_103/download?dataset=cmems_obs-oc_glo_bgc-plankton_my_l3-multi-4km_P1D
+
+https://my.cmems-du.eu/thredds/dodsC/cmems_obs-oc_arc_bgc-plankton_my_l3-multi-1km_P1M.html
+
+
+OCEANCOLOUR_GLO_BGC_L3_MY_009_103
+
+cmems_obs-oc_arc_bgc-plankton_my_l3-multi-1km_P1M
+cmems_obs-oc_arc_bgc-plankton_my_l3-multi-1km_P1D
+
+```{r}
+
+
+
+server <- "@my.cmems-du.eu";                    # Copernicus Marine server
+datasetID <- "cmems_obs-oc_arc_bgc-plankton_my_l3-multi-1km_P1M" # datasetID
+
+USERNAME <- user# readline("Enter your username: ")   # input your username
+PASSWORD <- pss# readline("Enter your password: ")   # input your password
+datasetID2 = "cmems_obs_glo_bgc3d_rep_weekly";  # datasetID
+```
+
+https://my.cmems-du.eu/thredds/dodsC/cmems_obs-oc_arc_bgc-plankton_my_l3-multi-1km_P1M
+
+provo ad accedere al server OPENDAP
+url
+```{r}
+# creates the OPeNDAP url
+url <- paste ("https://",USERNAME, ":", PASSWORD, server,"/thredds/dodsC/",datasetID, sep = "")
+
+# Open the connection
+ds <- nc_open(url)   
+
+ds
+```
+
+
+```{r}
+## Get dataset's dimensions 
+# Longitude
+lon <- ncvar_get(ds, "longitude")
+nlon <- dim(lon)
+# Latitude
+lat <- ncvar_get(ds, "latitude")
+nlat <- dim(lat)
+
+# Check dimensions
+print(c(nlon,nlat))
+
+# Time
+time <- ncvar_get(ds,"time")
+nt <- dim(time)
+t_units <- ncatt_get(ds, "time", "units")
+t_units
+
+as_datetime(time[1], origin = ymd("1970-01-01"))
+as_datetime(time[nt], origin = ymd("1970-01-01"))
+as.Date(time[1], origin = as.Date(ymd("1970-01-01")))
+
+# convert time -- split the time units string into fields
+# t_ustr <- strsplit(t_units$value, " ")
+# t_dstr <- strsplit(unlist(t_ustr)[3], "-")
+# date <- ymd(t_dstr) + dhours(time)      
+date <- as.Date(time, origin = ymd("1970-01-01"))
+datetime <- as.POSIXct(873331200, origin = "1970-01-01")
+as.Date(datetime)
+date <- as.Date(as.POSIXct(time, origin = "1970-01-01"))
+```
+
+And we enter the parameters of subsetting for our example:
+
+
+
+```{r}
+## Define the parameters and ranges for subset
+#Bounding box
+x <- c(-10, 50)                # longitude
+y <- c(72, 85)                # latitude
+t <- c("2021-07-01", "2021-07-31")  # time
+
+```
+
+
+
+Of course, the OPeNDAP connection is based on indices and bins (learn more), so we need to find the indices corresponding to the ranges above:
+
+```{r}
+# Function to get the indices from the ranges
+btw <- function(data, num){
+  c(min(which(num<=data)), max(which(num>=data)))
+}
+```
+
+```{r}
+
+# Starting indices
+lon_indices <- btw(data = lon, num = x)
+lat_indices <- btw(data = lat, num = y)
+time_indices <- btw(data = date, num = t)
+
+# Count number of indices to extract along each dimension
+lon_range <- lon_indices[-1] - lon_indices[1]+1
+lat_range <- lat_indices[-1] - lat_indices[1]+1
+time_range <- time_indices[-1] - time_indices[1]+1
+```
+
+
+Now that we have the indices and ranges, we can subset the dataset using the ncvar_get() function:
+```{r}
+
+# Start and Count vectors
+offset <- c(lon_indices[1], lat_indices[1], time_indices[1])    #lon,lat,depth,time
+count <- c(lon_range, lat_range,  time_range)
+
+# Get subsetted variable   
+chl <- ncvar_get(ds,"CHL", start = offset, count = count)
+```
+
