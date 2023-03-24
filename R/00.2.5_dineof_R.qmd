@@ -1,0 +1,92 @@
+---
+title: "0.1_monthly_chla_download"
+author: "mz"
+format: html
+editor: source
+---
+
+## Libraries
+
+load the packages needed for downloading the data
+
+```{r}
+
+
+library(metR)
+library(data.table)
+library(ggplot2)
+library(ncdf4)
+```
+
+
+
+"D:\Dropbox\R_projects\SV_phenology\data\daily\1998\CHL_03-10_1998_6.nc"
+
+```{r}
+url <- here::here('data/daily/1998/CHL_03-10_1998_6.nc')
+ncfile <- ncdf4::nc_open(url)
+exists(url)
+list.files(here::here('data/daily/1998'))
+
+field <- ReadNetCDF(url)
+field
+```
+
+
+# run the download script
+
+define download periods
+
+```{r}
+my_variable <- field$CHL
+length(my_variable)
+```
+Use the ImputeEOF function to fill in the missing values. The ImputeEOF function takes two arguments: the vector of values to be imputed (in this case, my_variable), and the number of EOF components to use for the imputation (you can experiment with different values to see which works best for your data):
+scss
+```{r}
+d1 <- field$time[50000]
+m1 <- field[time == d1]
+
+field[, imputed := ImputeEOF(CHL ~ latitude  + longitude | time , max.eof = 3)]
+
+```
+
+```{r}
+ggplot(field[time == d1], aes(latitude, longitude, z = CHL)) +
+  geom_contour_fill(breaks = MakeBreaks(binwidth = 2, exclude = 0), limits = c(0, 3)) +
+  scale_fill_divergent(breaks = MakeBreaks(binwidth = 2, exclude = 0), limits = c(0, 3))
+```
+
+
+```{r}
+m1 <- field[time == d1]
+
+
+
+library(raster)
+my_raster <- rasterFromXYZ(m1[,c("longitude", "latitude", "imputed")])
+plot(my_raster)
+
+
+
+ggplot() +
+  geom_raster(data = m1, aes(x = longitude, y = latitude, fill = imputed)) +
+  scale_fill_gradientn(colours = terrain.colors(100), limits = c(0, 5)) +
+  coord_equal() +
+  labs(x = "Longitude", y = "Latitude", fill = "CHL")
+
+```
+
+
+
+```{r}
+my_mean <- field[, mean(CHL, na.rm = TRUE), by = .(latitude, longitude)]
+
+ggplot() +
+  geom_raster(data = my_mean, aes(x = longitude, y = latitude, fill = imputed)) +
+  scale_fill_gradientn(colours = terrain.colors(100), limits = c(0, 5)) +
+  coord_equal() +
+  labs(x = "Longitude", y = "Latitude", fill = "CHL")
+
+```
+
