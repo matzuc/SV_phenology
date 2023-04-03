@@ -1,0 +1,254 @@
+---
+title: "8x8 trends"
+author: "mz"
+format: html
+editor: visual
+---
+
+## 8x8 grid
+
+dataset con una preliminare aggregazione spaziale per esplorare i trends
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(viridis)
+library(data.table)
+```
+
+creo il dataframe con i dati
+
+```{r}
+# first table
+dat <- read.csv(here::here('data/tab_8x8_1998.csv'), sep = ",", dec = ".")
+
+head(dat)
+
+```
+
+con un loop carico e attacco i dati per tutti gli altri anni
+
+```{r}
+for(i in 1999:2022){
+	tdat <- read.csv(here::here('data/', paste0('tab_8x8_', i, '.csv')), sep = ",", dec = ".")
+	
+	dat <- rbind(dat, tdat)
+	rm(tdat)
+	
+}
+```
+
+```{r}
+str(dat)
+```
+
+trasformo le date come data
+
+```{r}
+dat <- dat %>% mutate(ddat = lubridate::as_date(date)) %>%
+	mutate(lab_lat = round(latitude, 3), lab_lon = round(longitude, 3))%>%
+	mutate(year = lubridate::year(ddat), doy = lubridate::yday(ddat))
+
+dat$lab_lat <- factor(round(dat$latitude, 3))
+											
+dat$lab_lat <- factor(dat$lab_lat, levels = rev(levels(dat$lab_lat)))
+
+```
+
+```{r}
+ggplot(dat, aes(ddat, CHL_n)) +
+	geom_point(alpha = 0.1, size = 0.6) +
+	facet_grid(lab_lat ~ lab_lon) +
+	theme_few() +
+	scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) 
+
+
+ggsave(here::here('out',
+			'trend_8x8_N.png'), width = 12, height = 6, dpi = 400)
+```
+
+```{r}
+ggplot(dat, aes(ddat, CHL)) +
+	geom_point(alpha = 0.1, size = 0.6) +
+	facet_grid(lab_lat ~ lab_lon) +
+	theme_few() +
+#	scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a")
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla.png'), width = 12, height = 6, dpi = 400)
+```
+
+provo a zoomare su un paio di settori
+
+a\)
+
+```{r}
+
+lo1 <-  "5.292"; la1 <-  "74.438"
+
+es1 <- dat %>% filter(lab_lon == lo1, lab_lat == la1) %>%
+	mutate(year = lubridate::year(ddat), doy = lubridate::yday(ddat))
+
+
+ggplot(es1, aes(ddat, CHL)) +
+	geom_point(alpha = 0.1, size = 0.6) + 
+	geom_line(alpha = 0.2) + 
+	facet_grid(lab_lat ~ lab_lon) +
+	theme_few() +
+	scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a")
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla_ex1.png'), width = 12, height = 4, dpi = 400)
+
+
+
+```
+
+```{r}
+
+
+es1 <- dat %>% filter(lab_lon == lo1, lab_lat == la1) %>%
+	mutate(year = lubridate::year(ddat), doy = lubridate::yday(ddat))
+
+
+ggplot(es1, aes(doy, CHL, colour = year, group = year)) +
+	geom_point(alpha = 0.2, size = 0.6) + 
+	geom_line(alpha = 0.3) + 
+	facet_grid(lab_lat ~ lab_lon) +
+	theme_few() +
+	scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a") +
+	scale_colour_viridis(option = "magma") +
+		geom_smooth(geom="line", aes(alpha = 0.1), se = F)
+
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla_ex1_doy.png'), width = 7, height = 4, dpi = 400)
+
+
+```
+
+```{r}
+
+lo2 <-  "32.792"; la2 <-  "74.438"
+
+
+es2 <- dat %>% filter(lab_lon == lo2, lab_lat == la2) %>%
+	mutate(year = lubridate::year(ddat), doy = lubridate::yday(ddat))
+
+
+ggplot(es2, aes(doy, CHL, colour = year, group = year)) +
+	geom_point(alpha = 0.2, size = 0.6) + 
+	geom_line(alpha = 0.3) + 
+	facet_grid(year ~ lab_lon) +
+	theme_few() +
+	scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a") +
+	scale_colour_viridis(option = "magma")# +
+	#geom_smooth(geom="line", aes(alpha = 0.1), se = F)
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla_ex2_doy.png'), width = 4, height = 10, dpi = 400)
+
+
+
+
+ggplot(es2, aes(doy, CHL, colour = year, group = year)) +
+	#geom_point(alpha = 0.2, size = 0.6) + 
+	geom_line(alpha = 0.4, size = 0.2) + 
+	#facet_grid(year ~ lab_lon) +
+	theme_few() +
+	scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a") +
+	scale_colour_viridis(option = "magma")# +
+	#geom_smooth(geom="line", aes(alpha = 0.1), se = F)
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla_ex2_doyOVER.png'), width = 4, height = 3, dpi = 400)
+
+
+
+
+
+```
+
+```{r}
+
+
+ggplot(es2, aes(ddat, CHL)) +
+	geom_point(alpha = 0.1, size = 0.6) + 
+	geom_line(alpha = 0.2) + 
+	facet_grid(lab_lat ~ lab_lon) +
+	theme_few() +
+	scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a Ex. 2")
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla_ex2.png'), width = 12, height = 4, dpi = 400)
+
+
+```
+
+full plot
+
+```{r}
+
+ggplot(dat, aes(doy, CHL, colour = year, group = year)) +
+#	geom_point(alpha = 0.3, size = 0.6) + 
+	geom_line(alpha = 0.4) + 
+	facet_grid(lab_lat ~ lab_lon) +
+	theme_few() +
+	#scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a") +
+	scale_colour_viridis(option = "magma") 
+	
+
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla_trend_grid.png'), width = 12, height = 8, dpi = 400)
+
+```
+
+2 weeks
+
+```{r}
+dat2 <- dat %>%
+  mutate(two_weeks = cut(ddat, breaks = "2 weeks")) %>%
+  group_by(two_weeks, lab_lon, lab_lat) %>% summarise(aveCHL = mean(CHL, na.rm = T)) %>% mutate(year = as.numeric(stringr::str_sub(two_weeks, 1, 4)), ddat = lubridate::as_date(two_weeks), doy = lubridate::yday(ddat))
+
+
+ggplot(dat2, aes(doy, aveCHL, colour = year, group = year)) +
+#	geom_point(alpha = 0.3, size = 0.6) + 
+	geom_line(alpha = 0.4) + 
+	facet_grid(lab_lat ~ lab_lon) +
+	theme_few() +
+	#scale_y_log10() + 
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	ggtitle("Chlorophyll a") +
+	scale_colour_viridis(option = "magma") 
+	
+
+
+
+ggsave(here::here('out',
+			'trend_8x8_Chla_trend_grid_15DAYS.png'), width = 12, height = 8, dpi = 400)
+
+```
