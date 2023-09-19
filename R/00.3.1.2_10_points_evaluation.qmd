@@ -1,0 +1,225 @@
+---
+title: "10points trends"
+author: "mz"
+format: html
+editor: source
+---
+
+## 10 punti
+
+dataset con una preliminare aggregazione spaziale per esplorare i trends
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(viridis)
+#library(data.table)
+library(phenofit)
+library(stars)
+library(raster)
+```
+
+siccome il dataset non funziona, provo 
+```{r}
+
+# Define the path to the directory containing the data
+data_dir <- here::here('data/daily_coarsened')
+
+# Load all files in the data directory into a list of stars objects
+chl_list <- list.files(paste0(data_dir, "/1998"), full.names=TRUE)
+
+
+st1 <- read_stars(chl_list[[1]])
+st1	
+
+st2 <- read_stars(chl_list[[2]])	
+
+st_merged <- merge(st1, st2)
+st_frame <- st1 %>%  slice(time, 1)
+st_frame
+summary(st_frame)
+
+coords <- st_coordinates(st_frame)
+
+set.seed(14)
+chl_pts <- coords[sample(1:nrow(coords), 10), ] %>% mutate(id = 1:n())
+
+
+pt_sp <- st_as_sf(chl_pts, coords = c("x", "y"))
+plot(pt_sp)
+```
+
+
+provo ad estrarre i dati
+
+
+```{r}
+results <- data.frame( x=numeric(), y=numeric(), time=as.Date(character()), CHL=numeric())
+
+
+
+
+chl_list <- list.files(paste0(data_dir), full.names=TRUE, recursive = T)
+
+
+
+
+for (i in 1:length(chl_list)) {
+  # Extract the CHL values for the point and convert to a data frame
+	
+	st1 <- read_stars(chl_list[[i]])
+	
+
+	 
+	 dset <- st_extract(st1, pt_sp) 
+	 co <- st_coordinates(dset)
+	 coords <- st_coordinates(co$geometry)
+	X <- coords[,1]
+	Y <- coords[,2]
+	df <- as.data.frame(dset)
+	names(df)[3] <- "CHL"
+	
+	df <- df %>% dplyr::select(-geometry) %>% mutate(x = X, y = Y)
+	 
+	results <- rbind(results, df)
+	rm(df)
+	rm(st1)
+	
+	print(paste(i, "/", length(chl_list)))
+
+}
+
+
+```
+
+salvo il dataset
+
+```{r}
+
+write.csv(results, here::here('data', '00.3.1.2_10points_r.csv'), row.names = F)
+
+
+
+
+```
+
+
+attacco l'id e risalvo
+
+
+```{r}
+id <- results %>% mutate(idpre = paste0(x, y)) %>% group_by(idpre) %>% summarise(x = mean(x), y = mean(y)) %>% dplyr::select(-idpre) %>% mutate(id = 1:n())
+
+res2 <- left_join(results, id)
+write.csv(res2, here::here('data', '00.3.1.2_10points_r.csv'), row.names = F)
+
+
+
+```
+
+```{r}
+res3 <- res2 %>% filter(!is.na(CHL)) %>% mutate(chla = as.numeric(CHL))
+```
+
+
+
+```{r}
+ggplot(filter(res3, id == 2), aes(time, chla)) +
+	geom_point(alpha = 0.5) +
+	geom_smooth() +
+ 	scale_y_sqrt()
+```
+
+
+provo a plottarli tutti
+
+```{r}
+ggplot(res3, aes(time, chla, colour = factor(id))) +
+	geom_point(alpha = 0.5) +
+	geom_smooth() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id)
+```
+
+plotto con il giorno dell'anno
+
+
+```{r}
+res3 <- res3 %>% mutate(doy = lubridate::yday(time), year = lubridate::year(time))
+
+
+ggplot(res3, aes(doy, chla, colour = year, group = factor(year))) +
+	geom_point(alpha = 0.5) +
+	#geom_line() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id) +
+	scale_color_viridis()
+
+```
+
+
+# esemèio 1 anno 1 punto
+
+```{r}
+
+ggplot(filter(res3, id == 6, year == 2010), aes(doy, chla)) +
+	geom_point(alpha = 0.5) +
+	#geom_line() +
+	geom_smooth() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id) +
+	scale_color_viridis()
+
+```
+
+## parametri phenofit
+
+
+```{r}
+lambda         <- 8
+nptperyear     <- 23
+minExtendMonth <- 0.5
+maxExtendMonth <- 1
+minPercValid   <- 0
+wFUN           <- "wTSM" # wBisquare
+wmin           <- 0.2
+methods_fine <- c("AG", "Zhang", "Beck", "Elmore", "Gu")
+```
+
+
+Check input
+
+```{r}
+nptperyear = 8*30
+esempio <- res3 %>%  filter(id == 6)
+INPUT <- check_input(
+	t = esempio$time,
+	y = esempio$chla,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 4, wmin = 0.2
+)
+
+#plot_season(INPUT)
+```
+
+ROUGH fitting
+
+```{r}
+brks <- season_mov(INPUT,
+    list(FUN = "smooth_wWHIT", wFUN = wFUN,
+        maxExtendMonth = 5,
+        wmin = wmin, r_min = 0.4
+    ))
+plot_season(INPUT, brks)
+```
+
+il dataset non funziona perchè ci sono punti duplicati!!
+provo a rifarlo in R o in python
+
+

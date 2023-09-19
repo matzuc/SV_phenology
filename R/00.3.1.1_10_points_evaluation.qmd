@@ -1,0 +1,142 @@
+---
+title: "10points trends"
+author: "mz"
+format: html
+editor: source
+---
+
+## 8x8 grid
+
+dataset con una preliminare aggregazione spaziale per esplorare i trends
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(viridis)
+library(data.table)
+library(phenofit)
+```
+
+carico il dataframe con i dati
+
+```{r}
+# first table
+dat <- read.csv(here::here('data/00.3.0.1_10points.csv'), sep = ",", dec = ".")
+
+head(dat)
+
+
+
+```
+
+id
+
+```{r}
+id <- dat |> group_by(id) |> summarise() |> mutate(id2 = 1:n())
+
+dat2 <- left_join(dat, id) |> mutate(time = lubridate::as_date(time))
+dat2
+```
+
+
+
+```{r}
+ggplot(filter(dat2, id2 == 2), aes(time, CHL)) +
+	geom_point(alpha = 0.5) +
+	geom_smooth() +
+ 	scale_y_sqrt()
+```
+
+
+provo a plottarli tutti
+
+```{r}
+ggplot(dat2, aes(time, CHL, colour = factor(id2))) +
+	geom_point(alpha = 0.5) +
+	geom_smooth() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id2)
+```
+
+plotto con il giorno dell'anno
+
+
+```{r}
+dat2 <- dat2 |> mutate(doy = lubridate::yday(time), year = lubridate::year(time))
+
+
+ggplot(dat2, aes(doy, CHL, colour = year, group = factor(year))) +
+	geom_point(alpha = 0.5) +
+	#geom_line() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id2) +
+	scale_color_viridis()
+
+```
+
+
+# esemèio 1 anno 1 punto
+
+```{r}
+
+ggplot(filter(dat2, id2 == 2, year == 2010), aes(doy, CHL)) +
+	geom_point(alpha = 0.5) +
+	#geom_line() +
+	geom_smooth() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id2) +
+	scale_color_viridis()
+
+```
+
+## parametri phenofit
+
+
+```{r}
+lambda         <- 8
+nptperyear     <- 23
+minExtendMonth <- 0.5
+maxExtendMonth <- 1
+minPercValid   <- 0
+wFUN           <- "wTSM" # wBisquare
+wmin           <- 0.2
+methods_fine <- c("AG", "Zhang", "Beck", "Elmore", "Gu")
+```
+
+
+Check input
+
+```{r}
+nptperyear = 8*30
+esempio <- dat2 |> filter(id2 == 2)
+INPUT <- check_input(
+	t = esempio$time,
+	y = esempio$CHL,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 4, wmin = 0.2
+)
+
+#plot_season(INPUT)
+```
+
+ROUGH fitting
+
+```{r}
+brks <- season_mov(INPUT,
+    list(FUN = "smooth_wWHIT", wFUN = wFUN,
+        maxExtendMonth = 3,
+        wmin = wmin, r_min = 0.1
+    ))
+# plot_season(INPUT, brks)
+```
+
+il dataset non funziona perchè ci sono punti duplicati!!
+provo a rifarlo in R o in python
+
+

@@ -1,0 +1,388 @@
+---
+title: "10points trends"
+author: "mz"
+format: html
+editor: source
+---
+
+## 10 punti
+
+dataset con una preliminare aggregazione spaziale per esplorare i trends
+
+prendo il dataset binned 4k 5 days
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(viridis)
+#library(data.table)
+library(phenofit)
+library(rTIMESAT)
+library(stars)
+library(raster)
+library(lubridate)
+library(purrr)
+```
+
+# test da tutorial
+
+provo sia timesat che phenofit
+
+https://cran.r-project.org/web/packages/phenofit/vignettes/phenofit-procedures.html
+
+
+```{r}
+
+# Define the path to the directory containing the data
+data_dir <- here::here('data/binned5days_4km')
+
+# Load all files in the data directory into a list of stars objects
+chl_list <- list.files(paste0(data_dir), full.names=TRUE)
+
+chl_list <- chl_list[stringr::str_detect(chl_list, ".nc")]
+
+# selezione solo quelli 16D
+chl_list <- chl_list[stringr::str_detect(chl_list, "16k_5Days_")]
+
+st1 <- read_stars(chl_list)
+
+# Subset the first 16 dates based on the time dimension only
+st1_subset <- st1[,,,70:86,drop=FALSE]
+
+
+# Plot the subset
+plot(st1_subset, col = rev(terrain.colors(100)), key.pos = 1)
+
+
+st_frame <- st1 %>%  slice(time, 1)
+st_frame
+summary(st_frame)
+
+coords <- st_coordinates(st_frame)
+
+set.seed(817)
+chl_pts <- coords[sample(1:nrow(coords), 10), ] %>% mutate(id = 1:n())
+
+
+pt_sp <- st_as_sf(chl_pts, coords = c("x", "y"))
+plot(pt_sp)
+```
+
+
+provo ad estrarre i dati
+
+
+```{r}
+
+
+
+	 dset <- st_extract(st1, pt_sp) 
+	 co <- st_coordinates(dset)
+	 coords <- st_coordinates(co$geometry)
+	X <- coords[,1]
+	Y <- coords[,2]
+	df <- as.data.frame(dset)
+	names(df)[3] <- "CHL"
+
+
+	df <- df %>% dplyr::select(-geometry) %>% mutate(x = X, y = Y)
+	
+	results <- df
+
+```
+
+
+
+attacco l'id 
+
+
+```{r}
+id <- results %>% mutate(idpre = paste0(x, y)) %>% group_by(idpre) %>% summarise(x = mean(x), y = mean(y)) %>% dplyr::select(-idpre) %>% mutate(id = 1:n())
+
+res2 <- left_join(results, id)
+
+
+```
+
+```{r}
+res3 <- res2 %>% filter(!is.na(CHL)) %>% mutate(chla = as.numeric(CHL))
+table(res3$id)
+```
+
+
+
+```{r}
+ggplot(filter(res3, id == 2), aes(time, chla)) +
+	geom_point(alpha = 0.5) +
+	geom_smooth() +
+ 	scale_y_sqrt()
+```
+
+
+provo a plottarli tutti
+
+```{r}
+ggplot(res3, aes(time, chla, colour = factor(id))) +
+	geom_point(alpha = 0.5) +
+	geom_smooth() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id)
+```
+
+plotto con il giorno dell'anno
+
+
+```{r}
+res3 <- res3 %>% mutate(doy = lubridate::yday(time), year = lubridate::year(time))
+
+
+
+
+ggplot(res3, aes(doy, chla, colour = year, group = factor(year))) +
+	geom_point(alpha = 0.5) +
+	#geom_line() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id) +
+	scale_color_viridis()
+
+
+
+table(res3$id)
+```
+
+
+# esemèio 1 anno 1 punto
+
+```{r}
+
+ggplot(filter(res3, id == 7, year == 2010), aes(doy, chla)) +
+	geom_point(alpha = 0.5) +
+	#geom_line() +
+	geom_smooth() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~id) +
+	scale_color_viridis()
+
+```
+
+
+```{r}
+
+ggplot(filter(res3, id == 7), aes(doy, chla)) +
+	geom_point(alpha = 0.5) +
+	#geom_line() +
+	geom_smooth() +
+ 	scale_y_sqrt() +
+	theme_few() +
+	facet_wrap(~year) +
+	scale_color_viridis()
+
+
+```
+n. osservazioni
+
+
+```{r}
+plot(res3 |> filter(id ==7) |> group_by(year) |> summarize(n()))
+
+
+```
+
+
+## parametri phenofit
+
+
+```{r}
+lambda         <- 8
+nptperyear     <- 16
+minExtendMonth <- 0.5
+maxExtendMonth <- 1
+minPercValid   <- 0
+wFUN           <- "wTSM" # wBisquare
+wmin           <- 0.2
+methods_fine <- c("AG", "Zhang", "Beck", "Elmore", "Gu")
+```
+
+
+Check input
+
+```{r}
+library(lubridate)
+nptperyear = (30/5) * 8
+esempio <- res2 %>%  mutate(year = lubridate::year(time)) |> filter(id == 10, year > 2010) |> mutate(chla = as.numeric(CHL))
+
+
+
+
+INPUT <- check_input(
+	t = esempio$time,
+	y = esempio$chla,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 2, wmin = 0.1
+)
+
+plot_input(INPUT)
+```
+
+
+```{r}
+
+
+
+INPUT2 <- check_input(
+	t = as_date(esempio$time),
+	y = esempio$chla,
+	w = 0.4,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 2, 
+	#date_start = ymd("2019-03-01"),
+	#date_end = ymd("2019-10-31"),
+	 
+ south = FALSE,
+  wmin = 0.1,
+#  wsnow = 0.8,
+  ymin = 0,
+  missval = 0.01,
+ # maxgap ,
+  alpha = 0.02,
+  alpha_high = NULL,
+  mask_spike = TRUE,
+  na.rm = FALSE
+)
+
+plot_input(INPUT2)
+
+
+INPUT2$y
+plot(INPUT2$y)
+```
+
+
+
+
+ROUGH fitting
+
+
+```{r}
+options = list(rFUN = "smooth_wWHIT", wFUN = wFUN, lambda = 30)
+brks <- season(INPUT2, lambda = 30)
+brks
+plot_season(INPUT2, brks)
+plot(INPUT$w)
+
+```
+
+
+
+```{r}
+
+
+brks2 <- season_mov(INPUT2,
+						list(FUN = "smooth_wSG", wFUN = "wTSM",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        verbose = T,
+        iters = 5
+    ))
+
+plot_season(INPUT, brks2)
+brks2
+
+```
+
+
+
+## 2.4 Curve fitting
+
+
+```{r}
+fit <- curvefits(INPUT, brks2,
+    list(
+        methods = methods_fine, # ,"klos",, 'Gu'
+        wFUN = wFUN,
+        iters = 2,
+        wmin = wmin,
+        # constrain = FALSE,
+        nextend = 2,
+        maxExtendMonth = maxExtendMonth, minExtendMonth = minExtendMonth,
+        minPercValid = minPercValid
+    ))
+
+
+
+
+
+```
+
+
+```{r}
+dfit <- get_fitting(fit)
+print(dfit)
+# fine curvefitting
+g <- plot_curvefits(dfit, brks, title = NULL, cex = 1.5,  angle = 0)
+grid::grid.newpage()
+grid::grid.draw(g)
+```
+
+
+
+
+
+```{r}
+
+## 2.5 Extract phenology
+TRS <- c(0.1, 0.2, 0.5)
+l_pheno <- get_pheno(fit, TRS = TRS, IsPlot = FALSE) # %>% map(~melt_list(., "meth"))
+
+str(l_pheno)
+
+print(l_pheno$doy$Gu)
+l_pheno <- get_pheno(fit[1:15], method = "Gu", TRS = TRS, IsPlot = TRUE, show.title = T)
+
+```
+
+
+# provo altre librerie
+
+##rTIMESAT
+
+```{r}
+
+nptperyear = 23
+options <- list(
+    ylu                 = c(0, 9999),     # Valid data range (lower upper)
+    qc_1                = c(0, 0, 1),     # Quality range 1 and weight
+    qc_2                = c(1, 1, 0.5),   # Quality range 2 and weight
+    qc_3                = c(2, 3, 0.2),   # Quality range 3 and weight
+    A                   = 0.1,            # Amplitude cutoff value
+    output_type         = c(1, 1, 0),     # Output files (1/0 1/0 1/0), 1: seasonality data; 2: smoothed time-series; 3: original time-series
+    seasonpar           = 1.0,            # Seasonality parameter (0-1)
+    iters               = 2,              # No. of envelope iterations (3/2/1)
+    FUN                 = 2,              # Fitting method (1/2/3): (SG/AG/DL)
+    half_win            = 7,              # half Window size for Sav-Gol.
+    meth_pheno          = 1,              # (1: seasonal amplitude, 2: absolute value, 3: relative amplitude, 4: STL trend)
+    trs                 = c(0.5, 0.5)     # Season start / end values
+)
+
+```
+
+
+```{r}
+esempio2 <- esempio
+esempio2$chla[which(is.na(esempio2$chla))] <- 0.1
+
+r <- TSF_main(y = esempio$chla,  nptperyear, 
+              jobname = "rest", options, cache = FALSE)
+print(str(r)
+			
+```
+
+

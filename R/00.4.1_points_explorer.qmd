@@ -1,0 +1,31 @@
+---
+title: "Esplorazione punti"
+format: html
+editor: visual
+---
+
+## Pacchetti
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+```
+
+You can add options to executable code like this
+
+```{r}
+dat <- read.csv(here::here('data', '4.01_point_data.csv')) 
+
+# convert data as date in lubridate
+dat <- dat |> mutate(d = ymd(time))
+
+
+
+summary(dat)
+```
+
+```{r}
+ggplot(dat, aes(d, CHL)) +
+	geom_line()
+```

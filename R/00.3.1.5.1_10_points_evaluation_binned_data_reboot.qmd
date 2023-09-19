@@ -1,0 +1,854 @@
+---
+title: "rough trends"
+author: "mz"
+format: html
+editor: source
+---
+
+## 10 punti
+
+dataset con una preliminare aggregazione spaziale per esplorare i trends
+
+prendo il dataset binned 8x8 5 days
+prendo questo per capire il tipo di curva da fittare
+
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(viridis)
+#library(data.table)
+library(phenofit)
+library(rTIMESAT)
+library(stars)
+library(raster)
+library(lubridate)
+library(purrr)
+library(sf)
+```
+
+# test da tutorial
+
+provo  phenofit
+
+https://cran.r-project.org/web/packages/phenofit/vignettes/phenofit-procedures.html
+
+
+
+
+```{r}
+
+# Define the path to the directory containing the data
+data_dir <- here::here('data/binned5days_4km')
+
+# Load all files in the data directory into a list of stars objects
+chl_list <- list.files(paste0(data_dir), full.names=TRUE)
+
+chl_list <- chl_list[stringr::str_detect(chl_list, ".nc")]
+
+# selezione solo quelli 16D
+chl_list <- chl_list[stringr::str_detect(chl_list, "_8x8k_5Days_")]
+
+st1 <- read_stars(chl_list)
+
+st1
+# Subset the first 16 dates based on the time dimension only
+st1_subset <- st1[,,,70:86,drop=FALSE]
+
+
+# Plot the subset
+plot(st1_subset, col = rev(terrain.colors(100)), key.pos = 1)
+
+
+```
+
+
+
+
+estraggo i dati
+
+
+```{r}
+# extract values for each dimension
+df <- as.data.frame(st1)
+df$CHL = as.numeric(df$CHL_binned_8x8k_5Days_1998.nc)
+
+x <- st_get_dimension_values(st1, "x")
+y <- st_get_dimension_values(st1, "y")
+
+df$R_C <- paste0(match(df$y, y), "_", match(df$x, x))
+
+```
+
+
+grfico serie storica
+
+
+```{r}
+ggplot(df,
+			 aes(time, CHL)) +
+	geom_point() +
+	facet_wrap(~ R_C)
+
+```
+
+
+```{r}
+ggplot(filter(df, R_C == "8_7"),
+			 aes(time, CHL)) +
+	geom_point() +
+	geom_line(alpha = 0.4) +
+	facet_wrap(~ R_C) +
+	scale_y_sqrt() +
+	theme_bw()
+
+```
+
+
+
+plotto con il giorno dell'anno
+
+
+```{r}
+res3 <- df %>% mutate(doy = lubridate::yday(time), year = lubridate::year(time))
+
+
+
+res3 |> filter(R_C == "8_3") |> 
+ggplot( aes(doy, CHL, colour = year, group = factor(year))) +
+	geom_point(alpha = 0.5) +
+	geom_line(alpha = 0.2) +
+ 	scale_y_sqrt() +
+	theme_few() +
+	scale_color_viridis()
+
+```
+
+## parametri phenofit
+
+
+```{r}
+lambda         <- 8
+nptperyear     <- 16
+minExtendMonth <- 0.5
+maxExtendMonth <- 1
+minPercValid   <- 0
+wFUN           <- "wTSM" # wBisquare
+wmin           <- 0.2
+methods_fine <- c("AG", "Zhang", "Beck", "Elmore", "Gu")
+```
+
+
+Check input
+
+```{r}
+library(lubridate)
+nptperyear = (30/5) * 8
+esempio <- res3 %>%  mutate(year = lubridate::year(time)) |> filter(R_C == "8_1", year > 2014) |> mutate(chla = as.numeric(CHL))
+
+
+
+
+INPUT <- check_input(
+	t = esempio$time,
+	y = esempio$chla,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 2, wmin = 0.1
+)
+
+plot_input(INPUT)
+```
+
+
+```{r}
+
+
+
+INPUT2 <- check_input(
+	t = as_date(esempio$time),
+	y = esempio$chla,
+	w = 0.4,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 2, 
+	#date_start = ymd("2019-03-01"),
+	#date_end = ymd("2019-10-31"),
+	 
+ south = FALSE,
+  wmin = 0.1,
+#  wsnow = 0.8,
+  ymin = 0,
+  missval = 0.01,
+ # maxgap ,
+  #alpha = 0.02,
+ # alpha_high = NULL,
+  mask_spike = TRUE,
+  na.rm = FALSE
+)
+
+plot_input(INPUT2)
+
+
+INPUT2$y
+plot(INPUT2$y)
+```
+
+
+
+
+ROUGH fitting
+
+
+```{r}
+options = list(rFUN = "smooth_wWHIT", wFUN = wFUN, lambda = 30)
+brks <- season_mov(INPUT, lambda = 30)
+brks
+plot_season(INPUT, brks)
+plot(INPUT$w)
+
+```
+
+
+
+```{r}
+
+
+brks2 <- season_mov(INPUT2,
+						list(FUN = "smooth_wWHIT", wFUN = "wTSM",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        verbose = T,
+        iters = 5
+    ))
+
+plot_season(INPUT, brks2)
+brks2
+plot_season(INPUT2, brks2)
+```
+
+
+```{r}
+summary(brks2)
+```
+
+
+```{r}
+brks2$GOF
+```
+
+
+## confronto rough fitting
+```{r}
+brksA <- season_mov(INPUT2,
+				list(FUN = "smooth_wWHIT", wFUN = "wTSM",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 2
+    ))
+
+brksB <- season_mov(INPUT2,
+				list(FUN = "smooth_wWHIT", wFUN = "wBisquare",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 2
+    ))
+brksC <- season_mov(INPUT2,
+				list(FUN = "smooth_wWHIT", wFUN = "wChen",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 2
+    ))
+brksD <- season_mov(INPUT2,
+				list(FUN = "smooth_wWHIT", wFUN = "wChen",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 5
+    ))
+brksE <- season_mov(INPUT2,
+				list(FUN = "wSG", wFUN = "wChen",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 2
+    ))
+brksF <- season_mov(INPUT2,
+				list(FUN = "wHANTS", wFUN = "wChen",
+        maxExtendMonth = 1,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 2
+    ))
+brksA$GOF
+brksB$GOF
+brksC$GOF
+brksD$GOF
+brksE$GOF
+brksF$GOF
+
+plot_season(INPUT2, brksB)
+
+```
+
+
+la seconda opzione sembra ragionevole provo a rifare la stessa cosa, cambiando punto
+
+
+## 2.4 Curve fitting
+
+
+```{r}
+
+fit <- curvefits(INPUT, brks2,
+    list(
+        methods = methods_fine, # ,"klos",, 'Gu'
+        wFUN = wFUN,
+        iters = 2,
+        wmin = wmin,
+        # constrain = FALSE,
+        nextend = 2,
+        maxExtendMonth = maxExtendMonth, minExtendMonth = minExtendMonth,
+        minPercValid = minPercValid
+    ))
+
+
+summary(fit)
+summary(fit$`2011_1`$model$AG$zs$iter2)
+
+```
+
+
+```{r}
+dfit <- get_fitting(fit)
+print(dfit)
+# fine curvefitting
+g <- plot_curvefits(dfit, brksB, title = NULL, cex = 1.5,  angle = 0)
+grid::grid.newpage()
+grid::grid.draw(g)
+```
+
+
+
+
+
+```{r}
+
+## 2.5 Extract phenology
+TRS <- c(0.1, 0.2, 0.5)
+l_pheno <- get_pheno(fit, TRS = TRS, IsPlot = FALSE) # %>% map(~melt_list(., "meth"))
+
+str(l_pheno)
+
+print(l_pheno$doy$Gu)
+l_pheno <- get_pheno(fit[1:15], method = "Gu", TRS = TRS, IsPlot = TRUE, show.title = T)
+
+```
+
+
+# Approfondimento fit
+
+
+```{r}
+
+esempio2 <- res3 %>%  mutate(year = lubridate::year(time)) |> filter(R_C == "8_1", year > 2019) |> mutate(chla = as.numeric(CHL))
+
+ggplot(esempio, 
+			 aes(time, chla)) +
+	geom_point() +
+	geom_line() +
+	theme_bw()
+
+
+
+
+```
+
+
+stesso approccio
+
+
+```{r}
+
+
+
+INPUT_small <- check_input(
+	t = as_date(esempio2$time),
+	y = esempio2$chla,
+	w = 0.4,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 2, 
+	#date_start = ymd("2019-03-01"),
+	#date_end = ymd("2019-10-31"),
+	 
+ south = FALSE,
+  wmin = 0.1,
+#  wsnow = 0.8,
+  ymin = 0,
+  missval = 0.01,
+ # maxgap ,
+  #alpha = 0.02,
+ # alpha_high = NULL,
+  mask_spike = TRUE,
+  na.rm = FALSE
+)
+
+plot_input(INPUT_small)
+
+
+INPUT2$y
+plot(INPUT2$y)
+```
+
+
+salvo il dataset per l'interpolazione 
+```{r}
+write.csv(data.frame(t = as_date(esempio2$time),
+										 y = esempio2$chla),
+	here::here('data', '00.3.1.5.1_simulated.csv'))
+
+
+dd <- read.csv(here::here('data', '00.3.1.5.2_simulated_integration.csv'))
+
+```
+
+
+
+
+
+ROUGH fitting
+
+
+
+
+##  rough fitting
+```{r}
+
+INPUT_sim <- check_input(
+	t = as_date(dd$t),
+	y = dd$yfill,
+	w = 0.1,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = 365/5,
+    maxgap = 365 / 2, 
+	#date_start = ymd("2019-03-01"),
+	#date_end = ymd("2019-10-31"),
+	 
+ south = FALSE,
+  wmin = 0.05,
+#  wsnow = 0.8,
+  ymin = 0,
+  missval = 0.01,
+ # maxgap ,
+  #alpha = 0.02,
+ # alpha_high = NULL,
+  mask_spike = TRUE,
+  na.rm = FALSE
+)
+
+plot_input(INPUT_sim)
+
+brks_sim <- season_mov(INPUT_sim,
+				list(FUN = "smooth_wWHIT", wFUN = "wBisquare",
+        maxExtendMonth = 3,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 2
+    ))
+brks_sim$GOF
+
+plot_season(INPUT_sim, brks_sim)
+summary(brks_sim)
+brks_sim$GOF
+```
+
+
+
+## 2.4 Curve fitting
+
+
+```{r}
+
+fit_sim <- curvefits(INPUT_sim, brks_sim,
+    list(
+        methods = "Beck",#methods_fine, # ,"klos",, 'Gu'
+        wFUN = wFUN,
+        iters = 2,
+        wmin = 0.1,
+        # constrain = FALSE,
+        nextend = 2,
+        maxExtendMonth = maxExtendMonth, minExtendMonth = minExtendMonth,
+        minPercValid = minPercValid
+    ))
+
+
+
+```
+
+
+```{r}
+dfit <- get_fitting(fit_sim)
+print(dfit)
+#dplot <- dfit |> filter(meth == "Beck")
+# fine curvefitting
+g <- plot_curvefits(dfit, brks_sim, title = NULL, cex = 1.5,  angle = 0)
+grid::grid.newpage()
+grid::grid.draw(g)
+```
+
+
+
+
+
+```{r}
+
+## 2.5 Extract phenology
+TRS <- c(0.1, 0.2, 0.5)
+l_pheno <- get_pheno(fit_sim, TRS = TRS, IsPlot = FALSE) # %>% map(~melt_list(., "meth"))
+
+str(l_pheno)
+
+print(l_pheno$doy$Gu)
+l_pheno <- get_pheno(fit_sim[1:15], method = "Gu", TRS = TRS, IsPlot = TRUE, show.title = T)
+
+```
+
+
+adesso intravedo un secondo picco nel 2020, ma dipende anche dall'aver cambiato i parametri
+
+provo senza i dati simulati
+
+
+
+```{r}
+
+INPUT_sim2 <- check_input(
+	t = as_date(esempio2$time),
+	y = esempio2$chla,
+	w = 0.1,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = 365/5,
+    maxgap = 365 / 2, 
+	#date_start = ymd("2019-03-01"),
+	#date_end = ymd("2019-10-31"),
+	 
+ south = FALSE,
+  wmin = 0.05,
+#  wsnow = 0.8,
+  ymin = 0,
+  missval = 0.01,
+ # maxgap ,
+  #alpha = 0.02,
+ # alpha_high = NULL,
+  mask_spike = TRUE,
+  na.rm = FALSE
+)
+
+plot_input(INPUT_sim2)
+
+brks_sim2 <- season_mov(INPUT_sim2,
+				list(FUN = "smooth_wWHIT", wFUN = "wBisquare",
+        maxExtendMonth = 3,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 2
+    ))
+
+plot_season(INPUT_sim2, brks_sim2)
+
+```
+
+
+
+## 2.4 Curve fitting
+
+
+```{r}
+
+fit_sim2 <- curvefits(INPUT_sim2, brks_sim2,
+    list(
+        methods = "Beck",#methods_fine, # ,"klos",, 'Gu'
+        wFUN = wFUN,
+        iters = 2,
+        wmin = 0.1,
+        # constrain = FALSE,
+        nextend = 2,
+        maxExtendMonth = maxExtendMonth, minExtendMonth = minExtendMonth,
+        minPercValid = minPercValid
+    ))
+
+
+
+```
+
+
+```{r}
+dfit2 <- get_fitting(fit_sim2)
+print(dfit2)
+#dplot <- dfit |> filter(meth == "Beck")
+# fine curvefitting
+g2 <- plot_curvefits(dfit2, brks_sim2, title = NULL, cex = 1.5,  angle = 0)
+grid::grid.newpage()
+grid::grid.draw(g2)
+grid::grid.draw(g)
+
+
+```
+
+
+
+
+
+```{r}
+
+## 2.5 Extract phenology
+TRS2 <- c(0.1, 0.2, 0.5)
+l_pheno2 <- get_pheno(fit_sim2, TRS = TRS, IsPlot = FALSE) # %>% map(~melt_list(., "meth"))
+
+str(l_pheno2)
+
+print(l_pheno$doy$Gu)
+l_pheno2 <- get_pheno(fit_sim2, method = "Gu", TRS = TRS, IsPlot = TRUE, show.title = T)
+l_pheno
+```
+
+
+
+
+
+```{r}
+
+l_pheno2 <- get_pheno(fit_sim, method = "Gu", TRS = TRS, IsPlot = TRUE, show.title = T)
+```
+
+
+c'è una grossa differenza sul secondo picco, ma non sul primo
+
+
+provo tutta la serie
+
+
+
+
+```{r}
+es <- res3 |> filter(R_C == "8_8")
+INPUT_sim2 <- check_input(
+	t = as_date(es$time),
+	y = es$CHL,
+	w = 0.15,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = 200/5,
+    maxgap = 200 / 2, 
+	#date_start = ymd("2019-03-01"),
+	#date_end = ymd("2019-10-31"),
+	 
+ south = FALSE,
+  wmin = 0.05,
+#  wsnow = 0.8,
+  ymin = 0,
+  missval = 0.01,
+ # maxgap ,
+  #alpha = 0.02,
+ # alpha_high = NULL,
+  mask_spike = TRUE,
+  na.rm = FALSE
+)
+
+plot_input(INPUT_sim2)
+
+brks_sim2 <- season_mov(INPUT_sim2,
+				list(FUN = "smooth_wWHIT", wFUN = "wBisquare",
+        maxExtendMonth = 2,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 3,
+						 by="EACHI"
+    ))
+
+plot_season(INPUT_sim2, brks_sim2)
+
+```
+
+
+
+## 2.4 Curve fitting
+
+
+```{r}
+
+fit_sim2 <- curvefits(INPUT_sim2, brks_sim2,
+    list(
+        methods = "Beck",#methods_fine, # ,"klos",, 'Gu'
+        wFUN = wFUN,
+        iters = 2,
+        wmin = 0.1,
+        # constrain = FALSE,
+        nextend = 2,
+        maxExtendMonth = maxExtendMonth, minExtendMonth = minExtendMonth,
+        minPercValid = minPercValid
+    ))
+
+
+
+dfit2 <- get_fitting(fit_sim2)
+print(dfit2)
+#dplot <- dfit |> filter(meth == "Beck")
+# fine curvefitting
+g2 <- plot_curvefits(dfit2, brks_sim2, title = NULL, cex = 1.5,  angle = 0)
+grid::grid.newpage()
+grid::grid.draw(g2)
+
+
+```
+
+
+
+# punto su griglia reale
+
+4k, 5 days
+
+```{r}
+
+# Define the path to the directory containing the data
+data_dir <- here::here('data/binned5days_4km')
+
+# Load all files in the data directory into a list of stars objects
+chl_list <- list.files(paste0(data_dir), full.names=TRUE)
+
+chl_list <- chl_list[stringr::str_detect(chl_list, ".nc")]
+
+# selezione solo quelli 16D
+chl_list <- chl_list[stringr::str_detect(chl_list, "_4k_5Days_")]
+
+st1 <- read_stars(chl_list)
+
+# prendo un punto
+coords <- st_coordinates(st_frame)
+
+set.seed(817)
+chl_pts <- data.frame(x = 45, y = 73)
+
+
+pt_sp <- st_as_sf(chl_pts, coords = c("x", "y"))
+
+
+
+	 dset <- st_extract(st1, pt_sp) 
+	 co <- st_coordinates(dset)
+	 coords <- st_coordinates(co$geometry)
+	X <- coords[,1]
+	Y <- coords[,2]
+	df <- as.data.frame(dset)
+	names(df)[3] <- "CHL"
+
+
+
+	results <- df
+	df <- results |> mutate(chla = as.numeric(CHL))
+	
+ggplot(df, aes(time, chla)) +
+	geom_point()
+```
+
+
+
+
+```{r}
+
+INPUT_sim2 <- check_input(
+	t = as_date(df$time),
+	y = df$chla,
+	w = 0.1,
+	# d$w,  # NON ATTRIBUISCO PESI
+  #  QC_flag = d$QC_flag, # non ho flag di qualità
+    nptperyear = 200/5,
+    maxgap = 200 / 2, 
+	#date_start = ymd("2019-03-01"),
+	#date_end = ymd("2019-10-31"),
+	 
+ south = FALSE,
+  wmin = 0.05,
+#  wsnow = 0.8,
+  ymin = 0,
+  missval = 0.01,
+ # maxgap ,
+  #alpha = 0.02,
+ # alpha_high = NULL,
+  mask_spike = TRUE,
+  na.rm = FALSE
+)
+
+plot_input(INPUT_sim2)
+
+brks_sim2 <- season_mov(INPUT_sim2,
+				list(FUN = "smooth_wWHIT", wFUN = "wBisquare",
+        maxExtendMonth = 2,
+        wmin = wmin, r_min = 0.1,
+        #verbose = T,
+        iters = 3,
+						 by="EACHI"
+    ))
+
+plot_season(INPUT_sim2, brks_sim2)
+
+```
+
+
+
+## 2.4 Curve fitting
+
+
+```{r}
+
+fit_sim2 <- curvefits(INPUT_sim2, brks_sim2,
+    list(
+        methods = "Beck",#methods_fine, # ,"klos",, 'Gu'
+        wFUN = wFUN,
+        iters = 2,
+        wmin = 0.1,
+        # constrain = FALSE,
+        nextend = 2,
+        maxExtendMonth = maxExtendMonth, minExtendMonth = minExtendMonth,
+        minPercValid = minPercValid
+    ))
+
+
+
+dfit2 <- get_fitting(fit_sim2)
+print(dfit2)
+#dplot <- dfit |> filter(meth == "Beck")
+# fine curvefitting
+g2 <- plot_curvefits(dfit2, brks_sim2, title = NULL, cex = 1.5,  angle = 0)
+grid::grid.newpage()
+grid::grid.draw(g2)
+
+
+```
+
+
+```{r}
+library(mgcv)
+
+df2 <- df |> mutate(time2 = as.numeric(time))
+# Fit a GAM smoother to the data
+fit <- gam(chla ~ s(time2), method = "REML", data = df2)
+summary(fit)
+
+
+predict(fit, scale = "response")
+
+
+```
+
+

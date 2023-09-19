@@ -1,0 +1,66 @@
+---
+title: "Raster per test"
+author: "mz"
+format: html
+editor: visual
+---
+
+## 8x8 grid
+
+dataset con una preliminare aggregazione spaziale per esplorare i trends
+
+```{r}
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(viridis)
+library(phenofit)
+library(terra)
+library(tabularaster)
+library(raster)
+```
+
+carico la lista di files
+
+
+
+```{r}
+
+# Define the path to the directory containing the data
+data_dir <- here::here('data/binned5days_4km')
+
+# Load all files in the data directory into a list of stars objects
+chl_list <- list.files(paste0(data_dir), full.names=TRUE)
+
+chl_list <- chl_list[stringr::str_detect(chl_list, ".nc")]
+
+# selezione solo quelli 16D
+chl_list <- chl_list[stringr::str_detect(chl_list, "_8x8k_5Days_")]
+
+chl_list
+
+```
+
+
+```{r}
+# read files with terra in object st
+st <- rast(chl_list)
+st
+
+# extract time vector 
+ti <- time(st)
+
+ti
+
+
+```
+
+
+```{r}
+df <- as_tibble(stack(st))
+
+head(df)
+
+dim(df)
+```
+

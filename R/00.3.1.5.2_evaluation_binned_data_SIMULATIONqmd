@@ -1,0 +1,80 @@
+---
+title: "Simulation"
+format: html
+---
+
+```{r}
+library(ggplot2)
+```
+
+```{r}
+dd <- read.csv(	here::here('data', '00.3.1.5.1_simulated.csv'))
+dd$t <- lubridate::as_date(dd$t)
+head(dd)
+
+```
+
+
+
+```{r}
+windows();
+with(dd, plot(t, y)); lines(dd$t, dd$y)
+
+# Use locator() to interactively simulate values by drawing them on the plot
+points_list <- list()
+while (TRUE) {
+  # Wait for the user to click on the plot
+  point <- locator(1)
+
+  # If the user clicked outside of the plot, stop the loop
+  if (is.null(point)) {
+    break
+  }
+
+  # Record the coordinates of the clicked point
+  points_list[[length(points_list) + 1]] <- point
+  points_x <- sapply(points_list, "[[", 1)
+  points_y <- sapply(points_list, "[[", 2)
+
+  # Update the plot with the new point
+  points(point, col = "red")
+
+  # Show the current set of points in the plot
+  cat("Current points: ", paste0("(", points_x, ", ", points_y, ")"), "\n")
+}
+
+
+
+
+```
+
+
+integrazione
+```{r}
+int <- data.frame(t = lubridate::as_date(points_x),
+									y2 = points_y)
+
+
+
+start_date <- dmy("01-01-2020")
+end_date <- dmy("31-12-2022")
+
+
+# Create a sequence of days between the starting and ending dates
+out = data.frame(t =  seq(from = start_date, to = end_date, by = "day"))
+
+out <- left_join(out, dd[-1])
+out <- left_join(out, int)
+
+out <- out |> mutate(yfill = ifelse(is.na(y), y2, y)) |> filter(!is.na(yfill))
+
+ggplot(out, aes(t, y))+
+ geom_point() +
+	geom_point(aes(y = y2), colour = "red")
+	geom_line()
+
+```
+
+
+
+
