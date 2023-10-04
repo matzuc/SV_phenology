@@ -1,0 +1,319 @@
+---
+title: "Metriche fenologiche"
+author: "mz"
+format: html
+Rendering:
+  embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Librerie
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(dtplyr)
+library(ggplot2)
+library(ggthemes)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(data.table)
+library(cluster)
+library(PlotSvalbard)
+
+```
+
+## Dati 
+
+carico i dati
+
+
+```{r}
+chl_ano <- stack(here::here("R",  "daily_smoothed_climatology2.nc"))
+chl_mean <- stack(here::here("R", "CHL_mean_smoothed.nc"))
+
+kmeanR13 <- stack(here::here("data", "00.4.9_kmeans_13cl.tif"))
+kmeanR20 <- stack(here::here("data", "00.4.9_kmeans_clim_20cl.tif"))
+
+```
+
+
+
+# mappa con i cluster
+
+```{r}
+
+
+
+df <- as.data.frame(kmeanR20, xy = TRUE) |> drop_na()
+names(df)[3] <- "cluster"
+
+K <- 20
+set.seed(34)
+palette <- colorRamps::primary.colors()[sample(K, replace = F)]
+
+
+# Plotta con ggplot2
+ggplot() +
+  geom_raster(data = df, aes(x = x, y = y, fill = factor(cluster))) +
+  scale_fill_manual(values  = palette, name = "Cluster") +
+  coord_equal(ratio = 4) +
+  theme_few() +
+  labs(title = "k-means - spatial Climatology", subtitle = paste0(K, " classes"),
+  		 xlab = "") +
+#		geom_point(data = labs, aes(x = lon, y = lat), colour = "white", size = 5) +
+#	geom_point(data = labs, aes(x = lon, y = lat, colour = lab), size = 4) +
+
+xlab("") + ylab("") +
+	guides(color = "none")+
+	theme(legend.position = "bottom") 
+ggsave(here::here("out", paste0("00.4.6_kmeans_", K, "cl_climatology.png")), width = 12, height = 8, dpi = 300)
+
+
+```
+
+stime estensione dei cluster
+```{r}
+
+table(df$cluster)
+
+```
+
+
+Plotto le curve per cluster
+
+```{r height=8, width=12}
+
+
+dout <- as.data.frame(chl_ano)
+dK <- as.data.frame(kmeanR20)
+names(dK) <- "cluster"
+
+
+dout <- cbind(dout, dK) 
+
+dl <- dout |> pivot_longer(cols = 1:(ncol(dout) - 1), names_to = "column", values_to = "Value") 
+
+dl <- dl |> mutate(DOY = as.numeric(stringr::str_remove(column, "X"))) |> dplyr::select(-column)
+
+dlt <- data.table(df = dl)
+
+
+out <- dlt |> group_by(df.cluster, df.DOY) |> 
+	summarise(ave = mean(df.Value, na.rm = TRUE), 
+						sd = sd(df.Value, na.rm = TRUE))
+
+
+
+
+
+
+ggplot(as.data.frame(out), aes(df.DOY, ave, color = factor(df.cluster))) +
+	geom_ribbon(aes(ymin = ave - sd, ymax = ave + sd, fill = factor(df.cluster)), alpha = 0.5, colour = NA) +
+  geom_line() +
+	#geom_line(data = curvs, aes(df.DOY, Value, group = factor(Quantile)), alpha = 0.5, size = ) +
+  #scale_color_viridis(discrete = T) +
+	  scale_colour_manual(values = palette, name = "Cluster") +
+scale_fill_manual(values = palette, name = "Cluster") +
+	facet_wrap(~df.cluster, ncol = 7) +
+  theme_few() +
+  labs(title = "CHL mean smoothed / standardized", subtitle = "Spatial clusters - Climatology",
+  		 xlab = "") + 
+	#facet_wrap(~Cluster, ncol = 3) +
+	#coord_cartesian(xlim = c(70, 300)) +
+	# remove legend
+	guides(color = "none")+
+	theme(legend.position = "bottom") +
+	# vertical x axis labels
+	theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+	xlab("DOY") +
+	ylab("CHL / maximum CHL")
+
+
+
+ggsave(here::here('out', paste0('00.4.6_kmeans_', K, '_climatology_TREND.png')), width = 8, height = 6, dpi = 400)
+
+
+
+
+ggplot(as.data.frame(out), aes(df.DOY, ave, color = factor(df.cluster))) +
+  geom_line() +
+	#geom_line(data = curvs, aes(df.DOY, Value, group = factor(Quantile)), alpha = 0.5, size = ) +
+  #scale_color_viridis(discrete = T) +
+	  scale_colour_manual(values = palette, name = "Cluster") +
+	#facet_wrap(~df.cluster, ncol = 7) +
+  theme_few() +
+  labs(title = "CHL mean smoothed / standardized", subtitle = "Spatial clusters - Climatology",
+  		 xlab = "") + 
+	#facet_wrap(~Cluster, ncol = 3) +
+	coord_cartesian(xlim = c(70, 300)) +
+	# remove legend
+	guides(color = "none")+
+	theme(legend.position = "bottom") +
+	# vertical x axis labels
+	theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+	xlab("DOY") +
+	ylab("CHL / maximum CHL")
+
+
+
+ggsave(here::here('out', paste0('00.4.6_kmeans_', K, '_overlaps_climatology_TREND.png')), width = 5, height = 4, dpi = 400)
+
+
+
+
+
+```
+
+
+# phenometrics
+
+
+
+
+
+```{r}
+
+
+
+df <- as.data.frame(kmeanR13, xy = TRUE) |> drop_na()
+names(df)[3] <- "cluster"
+
+K <- 13
+set.seed(1334)
+palette <- colorRamps::primary.colors()[sample(K, replace = F)]
+
+
+# Plotta con ggplot2
+ggplot() +
+  geom_raster(data = df, aes(x = x, y = y, fill = factor(cluster))) +
+  scale_fill_manual(values  = palette, name = "Cluster") +
+  coord_equal(ratio = 4) +
+  theme_few() +
+  labs(title = "k-means - spatial Phenometrics", subtitle = paste0(K, " classes"),
+  		 xlab = "") +
+#		geom_point(data = labs, aes(x = lon, y = lat), colour = "white", size = 5) +
+#	geom_point(data = labs, aes(x = lon, y = lat, colour = lab), size = 4) +
+
+xlab("") + ylab("") +
+	guides(color = "none")+
+	theme(legend.position = "bottom") 
+ggsave(here::here("out", paste0("00.4.6_kmeans_", K, "cl_Phenometrics.png")), width = 12, height = 8, dpi = 300)
+
+
+```
+
+
+stime estensione dei cluster
+```{r}
+
+table(df$cluster)
+
+```
+
+
+
+
+
+Plotto le curve per cluster
+
+```{r height=8, width=12}
+
+
+dout <- as.data.frame(chl_mean)
+dK <- as.data.frame(kmeanR13)
+names(dK) <- "cluster"
+
+
+dout <- cbind(dout, dK) 
+
+dl <- dout |> pivot_longer(cols = 1:(ncol(dout) - 1), names_to = "column", values_to = "Value") 
+
+dl <- dl |> mutate(DOY = as.numeric(stringr::str_remove(column, "X"))) |> dplyr::select(-column)
+
+dlt <- data.table(df = dl)
+
+
+out <- dlt |> group_by(df.cluster, df.DOY) |> 
+	summarise(ave = mean(df.Value, na.rm = TRUE), 
+						sd = sd(df.Value, na.rm = TRUE))
+
+
+
+
+
+
+ggplot(as.data.frame(out), aes(df.DOY, ave, color = factor(df.cluster))) +
+	geom_ribbon(aes(ymin = ave - sd, ymax = ave + sd, fill = factor(df.cluster)), alpha = 0.5, colour = NA) +
+  geom_line() +
+	#geom_line(data = curvs, aes(df.DOY, Value, group = factor(Quantile)), alpha = 0.5, size = ) +
+  #scale_color_viridis(discrete = T) +
+	  scale_colour_manual(values = palette, name = "Cluster") +
+scale_fill_manual(values = palette, name = "Cluster") +
+	facet_wrap(~df.cluster, ncol = 5, scale = "free_y") +
+  theme_few() +
+  labs(title = "CHL mg/m3", subtitle = "Spatial clusters - Phenometrics",
+  		 xlab = "DOY") + 
+	#facet_wrap(~Cluster, ncol = 3) +
+	#coord_cartesian(xlim = c(70, 300)) +
+	# remove legend
+	guides(color = "none")+
+	theme(legend.position = "bottom") +
+	# vertical x axis labels
+	theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+	xlab("DOY") +
+	ylab("CHL mg/m3L")
+
+
+
+ggsave(here::here('out', paste0('00.4.6_kmeans_', K, '_Phenometrics_TREND.png')), width = 8, height = 6, dpi = 400)
+
+
+
+
+ggplot(as.data.frame(out), aes(df.DOY, ave, color = factor(df.cluster))) +
+  geom_line() +
+	#geom_line(data = curvs, aes(df.DOY, Value, group = factor(Quantile)), alpha = 0.5, size = ) +
+  #scale_color_viridis(discrete = T) +
+	  scale_colour_manual(values = palette, name = "Cluster") +
+	#facet_wrap(~df.cluster, ncol = 7) +
+  theme_few() +
+ labs(title = "CHL mg/m3", subtitle = "Spatial clusters - Phenometrics",
+  		 xlab = "DOY") + 
+	#facet_wrap(~Cluster, ncol = 3) +
+	coord_cartesian(xlim = c(70, 300)) +
+	# remove legend
+	guides(color = "none")+
+	theme(legend.position = "bottom") +
+	# vertical x axis labels
+	theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+	xlab("DOY") +
+	ylab("CHL mg/m3L")
+
+
+
+
+ggsave(here::here('out', paste0('00.4.6_kmeans_', K, '_overlaps_Phenometrics_TREND.png')), width = 5, height = 4, dpi = 400)
+
+
+
+
+
+```
+
+
+
+
+
+```{r}
+
+ basemap("barentssea", bathymetry = TRUE, currents = TRUE,
+current.size = "scaled", legends = c(FALSE, TRUE))
+
+```
+
+

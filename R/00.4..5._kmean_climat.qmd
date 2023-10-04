@@ -1,0 +1,353 @@
+---
+title: "Metriche fenologiche"
+author: "mz"
+format: html
+Rendering:
+  embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Librerie
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(data.table)
+library(dbscan)
+library(cluster)
+library(ggOceanMaps)
+```
+
+## Dati della climatologia
+
+
+```{r}
+chl_mean <- stack(here::here("R",  "daily_smoothed_climatology2.nc"))
+```
+
+```{r}
+
+brick_chl <- brick(chl_mean)
+
+# Calcola una maschera dove tutte le bande sono NA
+mask <- calc(brick_chl, fun = function(x) { 
+  if (all(is.na(x))) { 
+    return(NA)
+  } else {
+    return(1)
+  } 
+})
+
+# Campiona usando la maschera
+pts <- sampleRandom(mask, size=20, sp=TRUE)
+vals <- extract(brick_chl, pts)
+
+# Costruisci un dataframe
+df <- as.data.frame(vals)
+df$ID <- 1:nrow(df)
+
+# Trasforma in formato 'long' per ggplot
+df_long <- tidyr::pivot_longer(df, -ID, names_to = "Date", values_to = "Value")
+df_long$Date <- stringr::str_remove(df_long$Date, "X") |> as.numeric()
+
+# Plot
+ggplot(df_long, aes(x = as.numeric(Date), y = Value, group = ID, color = factor(ID))) +
+  geom_line(alpha = 0.5) +
+  theme_minimal() +
+  labs(title = "Serie storiche di 20 punti campionati a caso", x = "Data", y = "Valore", color = "Punto ID")
+```
+
+
+
+# includo xy alla classificazione cluster
+
+
+```{r}
+
+df <- as.data.frame(chl_mean, xy=TRUE)
+df$id <- 1:nrow(df)
+th <- 0.7
+
+
+# conta il numero di NA per ogni riga
+righeNA <- rowSums(is.na(df)) / ncol(df)
+hist(righeNA)
+length(righeNA[righeNA > th]) / length(righeNA)
+
+# conta il numero di NA per ogni colonna
+colonneNA <- colSums(is.na(df)) / nrow(df)
+hist(colonneNA)
+length(colonneNA[colonneNA > th]) / length(colonneNA)
+
+
+
+
+
+df2 <- df[righeNA < th, colonneNA < th] |> 
+	# Rimuovi righe con solo NA tranne x e y
+  mutate(across(everything(), ~replace_na(., 0))) %>%
+  mutate(across(everything(), ~ifelse(is.nan(.) | is.infinite(.), 0, .)))
+
+df2[1:2]  <- scale(df2[1:2])
+
+
+object.size(df2)
+# calcola in Mb
+object.size(df2) / 1000000
+
+```
+
+
+# n cluster
+# ```{r}
+# 
+# # elbow method:
+# 
+# set.seed(1213) 
+# wss <- numeric(15)
+# for (k in 1:15) {
+# 	
+#   km_out <- kmeans(df2, centers = k)
+#   wss[k] <- km_out$tot.withinss
+#   print(k)
+# }
+# plot(1:15, wss, type="b", xlab="Number of Clusters", ylab="Within groups sum of squares")
+# # 7-8
+# # Silhouette method:
+# ```
+
+
+elbow method parallel
+
+```{r}
+library(parallel)
+
+# sample npoint su df2
+set.seed(123)
+ntpoint <- 20000
+smalldf2 <- df2[sample(nrow(df2), ntpoint), -207]
+
+
+# Generate some sample data
+set.seed(1233)
+
+# Number of clusters to try
+ks <- 2:50
+# Setup parallel backend
+cl <- makeCluster(8)  # use one less than the total number of cores
+clusterExport(cl, "smalldf2")  # export necessary data to each worker
+
+# Parallelized k-means
+kmeans_results <- parLapply(cl, ks, function(k) {
+  kmeans(smalldf2, centers=k, nstart=25)
+})
+
+# Stop the cluster
+stopCluster(cl)
+```
+
+
+
+
+```{r}
+wss_values <- sapply(kmeans_results, function(km) km$tot.withinss)
+
+# Crea il grafico
+plot(ks, wss_values, type="b", pch=19, frame=FALSE, 
+     xlab="Number of clusters K", ylab="Total within-cluster sum of squares",
+     main="Elbow Method for Optimal k")
+grid()
+```
+
+
+
+
+prendo 20
+
+```{r}
+K <- 20
+# k means
+set.seed(1333) # for reproducibility
+km_result <- kmeans(df2[, !(names(df2) %in% c("id"))], centers = K) 
+km_result
+
+
+
+out <- data.frame(id = df2$id, cluster = km_result$cluster)
+
+
+
+kmeanout <- left_join(df, out , by = "id")
+
+kmeanR <- chl_mean[[56]]
+values(kmeanR) <- kmeanout$cluster
+plot(kmeanR)
+names(kmeanR) <- "cluster"
+
+
+
+writeRaster(kmeanR, filename = here::here("data", paste0("00.4.9_kmeans_clim_", K, "cl.tif")), format = "GTiff", overwrite = TRUE)
+
+
+
+dfplot <- as.data.frame(kmeanR, xy = TRUE) |> drop_na()
+
+
+
+random_colors <- sample(colors(), K)
+
+
+
+# Plotta con ggplot2
+ggplot() +
+  geom_raster(data = dfplot, aes(x = x, y = y, fill = factor(cluster))) +
+  scale_fill_manual(values = random_colors) +
+#  scale_fill_viridis(limits = c(0 : K), name = "Cluster", discrete=TRUE) +
+  coord_equal(ratio = 4) +
+  theme_few() +
+  labs(title = "k-means Climatology - spatial", subtitle = paste0(K, "classes"),
+  		 xlab = "") +
+#		geom_point(data = labs, aes(x = lon, y = lat), colour = "white", size = 5) +
+#	geom_point(data = labs, aes(x = lon, y = lat, colour = lab), size = 4) +#
+	# random discrete scale for colours
+#	scale_colour_viridis(discrete=TRUE) +# to add a scale bar+
+xlab("") + ylab("") +
+	guides(color = "none")+
+	theme(legend.position = "bottom") 
+ggsave(here::here('out', '00.4.5_kmeans_13cl_pnenometrics.png'), width = 12, height = 8, dpi = 300)
+
+
+```
+
+
+
+
+```{r}
+# Estrai i valori dal raster
+values_chl <- getValues(chl_mean)
+
+# Estrai i valori dal raster dei cluster (assumendo che il tuo raster dei cluster si chiami "base")
+values_cluster <- getValues(kmeanR)
+
+# Crea un data frame
+df <- data.frame(DOY = rep(60:305, ncell(chl_mean)), # Modifica i DOY secondo le tue necessità
+                 Value = as.vector(t(values_chl)), 
+                 Cluster = rep(values_cluster, nlayers(chl_mean)))
+
+
+result <- df %>%
+  group_by(DOY, Cluster) %>%
+  summarize(MeanValue = mean(Value, na.rm = TRUE),
+  					q25 = quantile(Value, probs = 0.25, na.rm = TRUE),
+  					q75 = quantile(Value, probs = 0.75, na.rm = TRUE),
+  					sd = sd(Value, na.rm = TRUE),
+  					se = sd / sqrt(length(Value))
+  					)
+
+
+
+ggplot(result, aes(DOY, MeanValue, color = factor(Cluster))) +
+	geom_ribbon(aes(ymin = q25, ymax = q75, fill = Cluster), alpha = 0.5, colour = NA) +
+  geom_line() +
+  scale_color_viridis(discrete = T) +
+	scale_fill_viridis() +
+  theme_few() +
+  labs(title = "CHL mean smoothed", subtitle = "doy 150",
+  		 xlab = "") + facet_wrap(~Cluster, ncol = 3) +
+	coord_cartesian(xlim = c(70, 300))
+
+
+
+
+
+```
+
+
+
+```{r}
+ggplot(result, aes(DOY, MeanValue, color = factor(Cluster))) +
+	#geom_ribbon(aes(ymin = q25, ymax = q75, fill = Cluster), alpha = 0.5, colour = NA) +
+  geom_line() +
+  scale_color_viridis(discrete = T) +
+	scale_fill_viridis() +
+  theme_few() +
+  labs(title = "CHL mean smoothed")
+  	
+	#facet_wrap(~Cluster, ncol = 3) +
+	coord_cartesian(xlim = c(70, 300))
+
+
+```
+
+
+non mi torna ancora il plot con le medie 
+
+
+```{r height=8, width=12}
+
+library(dtplyr)
+library(dplyr)
+
+dout <- as.data.frame(chl_mean)
+dK <- as.data.frame(kmeanR)
+
+dout <- cbind(dout, dK) 
+
+dl <- dout |> pivot_longer(cols = 1:(ncol(dout) - 1), names_to = "column", values_to = "Value") 
+
+dl <- dl |> mutate(DOY = as.numeric(stringr::str_remove(column, "X"))) |> dplyr::select(-column)
+
+dlt <- data.table(df = dl)
+
+
+out <- dlt |> group_by(df.cluster, df.DOY) |> 
+	summarise(ave = mean(df.Value, na.rm = TRUE), 
+						sd = sd(df.Value, na.rm = TRUE))
+
+
+ggplot(as.data.frame(out), aes(df.DOY, ave, color = factor(df.cluster))) +
+	geom_ribbon(aes(ymin = ave - sd, ymax = ave + sd, fill = factor(df.cluster)), alpha = 0.5, colour = NA) +
+  geom_line() +
+  #scale_color_viridis(discrete = T) +
+	  scale_colour_manual(values = random_colors) +
+scale_fill_manual(values = random_colors) +
+	facet_wrap(~df.cluster, ncol = 4) +
+  theme_few() +
+  labs(title = "CHL mean smoothed / standardized", subtitle = "spa",
+  		 xlab = "") + 
+	#facet_wrap(~Cluster, ncol = 3) +
+	coord_cartesian(xlim = c(70, 300)) +
+	# remove legend
+	guides(color = "none")
+
+
+ggsave(here::here('out', '00.4.5_kmeans_13cl_pnenometrics_TREND.png'), width = 12, height = 8, dpi = 300)
+
+
+
+
+```
+
+
+
+
+
+# ```{r}
+# 
+# basemap("barentssea", bathymetry = TRUE, currents = TRUE)
+# 
+# ```
+
+

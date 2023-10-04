@@ -1,0 +1,811 @@
+---
+title: "Metriche fenologiche"
+author: "mz"
+format: html
+Rendering:
+  embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Librerie
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(data.table)
+library(dbscan)
+library(cluster)
+library(ggOceanMaps)
+```
+
+## Dati della climatologia
+
+
+```{r}
+chl_mean <- stack(here::here("R",  "CHL_mean_smoothed.nc"))
+```
+
+
+
+```{r fig.height=8, fig.width=8}
+# seleziona chl_mean doy 150
+
+
+doy140 <- chl_mean[[140]]
+# par(mfrow=c(1,1))
+# par(mar=c(5,4,4,2)+0.1)
+# plot(doy140)
+
+# plot doy 150 di chl_mean
+
+df <- as.data.frame(doy140, xy = TRUE) |> drop_na()
+
+# Plotta con ggplot2
+ggplot() +
+  geom_raster(data = df, aes(x = x, y = y, fill = X199)) +
+  scale_fill_viridis(option = "magma", limits = c(0, 5), name = "Chl-a mg/m3") +
+  coord_equal(ratio = 4) +
+  theme_few() +
+  labs(title = "CHL mean smoothed", subtitle = "doy 150",
+  		 xlab = "") +
+	scale_color_viridis(discrete=TRUE) +# to add a scale bar+
+xlab("") + ylab("") +
+	guides(color = "none")+
+	theme(legend.position = "bottom") 
+
+```
+
+
+
+
+# metriche spaziali
+
+
+```{r}
+
+phenostats_pixel_old <- function(chl_values){
+  # Calcola il vettore doy
+  doy <- str_sub(names(chl_values), 2, str_length(names(chl_values))) |> 
+    as.numeric() 
+
+  # Calcola la soglia
+  thr <- median(chl_values, na.rm = T) * 1.05
+  
+  above_threshold <- ifelse(!is.na(chl_values) & chl_values > thr, 1, 0)
+  change <- c(0, diff(above_threshold))
+  group_temp <- cumsum(change != 0)
+  
+  # Creazione di gruppi con rle
+  rle_groups <- rle(above_threshold)
+  group <- rep(seq_along(rle_groups$lengths), rle_groups$lengths)
+  
+  # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+  valid_groups <- rle_groups$lengths >= 14 & rle_groups$values == 1
+  
+  valid_chl_values <- chl_values[group %in% which(valid_groups)]
+  valid_doy <- doy[group %in% which(valid_groups)]
+  
+  mx <- max(valid_chl_values, na.rm = TRUE)
+  day_mx <- valid_doy[which.max(valid_chl_values)]
+  amplitude <- mx - thr
+  BArea <- sum(valid_chl_values) # Questa è una semplice somma, potrebbe non rappresentare ciò che intendi con "integrate_numeric"
+  
+  # Calcoliamo altre metriche
+  CHLmean <- mean(chl_values, na.rm = TRUE)
+  Threshold <- median(chl_values, na.rm = TRUE)
+  Bloom_Frequency <- sum(valid_groups)
+  Max_Diff <- ifelse(mx == max(chl_values), mx - sort(chl_values, decreasing = TRUE)[2], NA_real_)
+  Day_Diff <- day_mx - valid_doy[order(valid_chl_values, decreasing = TRUE)[2]]
+  
+  
+  return(list(Threshold = Threshold, CHLmean = CHLmean, mx = mx, day_mx, amplitude = amplitude, Bloom_Frequency = Bloom_Frequency, Max_Diff = Max_Diff, Day_Diff = Day_Diff, BArea = BArea))
+}
+
+
+
+phenostats_pixel <- function(chl_values){
+  # # Funzione di integrazione
+  # integrate_numeric <- function(x, y) {
+  #   n <- length(y)
+  #   if (n %% 2 == 0) {
+  #     # Trapezoidal rule for even number of points
+  #     h <- diff(x)
+  #     return(sum(h * (y[-1] + y[-length(y)]) / 2))
+  #   } else {
+  #     # Simpson's rule for odd number of points
+  #     h <- (max(x) - min(x)) / (n - 1)
+  #     return(h / 3 * (y[1] + y[n] + 4 * sum(y[seq(2, n - 1, 2)]) + 2 * sum(y[seq(3, n - 2, 2)])))
+  #   }
+  # }
+
+  # Calcola il vettore doy
+  doy <- str_sub(names(chl_values), 2, str_length(names(chl_values))) |> 
+    as.numeric() 
+
+  # Calcola la soglia
+  thr <- median(chl_values, na.rm = T) * 1.05
+  above_threshold <- ifelse(!is.na(chl_values) & chl_values > thr, 1, 0)
+  change <- c(0, diff(above_threshold))
+  group_temp <- cumsum(change != 0)
+  
+  # Creazione di gruppi con rle
+  rle_groups <- rle(above_threshold)
+  group <- rep(seq_along(rle_groups$lengths), rle_groups$lengths)
+  
+  # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+  valid_groups <- rle_groups$lengths >= 14 & rle_groups$values == 1
+  valid_chl_values <- chl_values[group %in% which(valid_groups)]
+  valid_doy <- doy[group %in% which(valid_groups)]
+  
+  mx <- max(valid_chl_values, na.rm = TRUE)
+  day_mx <- valid_doy[which.max(valid_chl_values)]
+  amplitude <- mx - thr
+  
+  # Uso la funzione integrate_numeric per calcolare l'area
+  BArea <- integrate_numeric(valid_doy, valid_chl_values)
+  
+  # Calcoliamo altre metriche
+  CHLmean <- mean(chl_values, na.rm = TRUE)
+  Threshold <- median(chl_values, na.rm = TRUE)
+  Bloom_Frequency <- sum(valid_groups)
+  Max_Diff <- ifelse(mx == max(chl_values), mx - sort(chl_values, decreasing = TRUE)[2], NA_real_)
+  Day_Diff <- day_mx - valid_doy[order(valid_chl_values, decreasing = TRUE)[2]]
+  
+  # Metriche mancanti (aggiungere qui le metriche mancanti)
+  # Ad esempio:
+  # metric_X = calcola_metrica(chl_values)
+  
+  return(list(Threshold = Threshold, CHLmean = CHLmean, mx = mx, amplitude = amplitude, 
+              Bloom_Frequency = Bloom_Frequency, Max_Diff = Max_Diff, Day_Diff = Day_Diff, BArea = BArea))
+}
+
+
+
+
+
+phenostats_pixel_df <- function(data) {
+  return(phenostats_pixel(unlist(data)))
+}
+
+integrate_numeric <- function(x, y) {
+  n <- length(y)
+  
+  if (n %% 2 == 0) {
+    # Trapezoidal rule for even number of points
+    h <- diff(x)
+    return(sum(h * (y[-1] + y[-length(y)]) / 2))
+  } else {
+    # Simpson's rule for odd number of points
+    h <- (max(x) - min(x)) / (n - 1)
+    return(h / 3 * (y[1] + y[n] + 4 * sum(y[seq(2, n - 1, 2)]) + 2 * sum(y[seq(3, n - 2, 2)])))
+  }
+}
+
+
+phenostats_pixel_safe <- function(chl_values) {
+  tryCatch({
+    phenostats_pixel(chl_values)
+  }, error=function(e) {
+    return(list(Threshold = NA, CHLmean = NA, mx = NA, amplitude = NA, 
+                Bloom_Frequency = NA, Max_Diff = NA, Day_Diff = NA, BArea = NA))
+  })
+}
+```
+
+
+
+small raster
+
+```{r}
+# prendo un subseto di 50x50 pixel in basso a sinistra
+
+
+start_time <- Sys.time()
+
+small <- crop(chl_mean, extent(chl_mean, 1248-50, 1248, 1, 50))
+
+
+df <- as.data.frame(stack(small), xy=TRUE)
+
+
+df2 <- df %>%
+  rowwise() %>%
+  mutate(result = list(phenostats_pixel(c_across(starts_with("X"))))) %>%
+  unnest_wider(result) 
+
+names(df2)
+
+r_metric1 <- rasterFromXYZ(df2[, c('x', 'y', "Threshold", "CHLmean", "mx", "amplitude", "Bloom_Frequency", "Max_Diff", "Day_Diff", "BArea")])
+plot(r_metric1)
+
+end_time <- Sys.time()
+time_takenDPLYR <- end_time - start_time
+time_takenDPLYR
+
+start_time <- Sys.time()
+dt <- as.data.table(as.data.frame(stack(small), xy=TRUE))
+cols_to_process <- grep("^X", names(dt), value = TRUE)
+
+dt[, c("Threshold", "CHLmean", "mx", "amplitude", "Bloom_Frequency", "Max_Diff", "Day_Diff", "BArea") := 
+   phenostats_pixel_df(.SD), .SDcols = cols_to_process]
+r_metric1 <- rasterFromXYZ(dt[, c('x', 'y', 'Bloom_Frequency')])
+plot(r_metric1)
+end_time <- Sys.time()
+time_takenDT <- end_time - start_time
+
+time_takenDPLYR
+```
+
+
+```{r}
+phenostats_pixel_dt <- function(dt, DOYs) {
+  # Applichiamo la funzione a ogni riga di dt
+  results <- apply(dt, 1, function(chl_values) {
+    # Il resto della funzione rimane in gran parte invariato
+    
+    # Calcola la soglia
+    thr <- median(chl_values, na.rm = TRUE) * 1.05
+    
+    above_threshold <- ifelse(!is.na(chl_values) & chl_values > thr, 1, 0)
+    change <- c(0, diff(above_threshold))
+    
+    # Creazione di gruppi con rle
+    rle_groups <- rle(above_threshold)
+    group <- rep(seq_along(rle_groups$lengths), rle_groups$lengths)
+    
+    # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+    valid_groups <- rle_groups$lengths >= 14 & rle_groups$values == 1
+    
+    valid_chl_values <- chl_values[group %in% which(valid_groups)]
+    valid_DOYs <- DOYs[group %in% which(valid_groups)]
+    
+    mx <- max(valid_chl_values, na.rm = TRUE)
+    day_mx <- valid_DOYs[which.max(valid_chl_values)]
+    amplitude <- mx - thr
+    BArea <- sum(valid_chl_values)
+    
+    # Calcoliamo altre metriche
+    CHLmean <- mean(chl_values, na.rm = TRUE)
+    Threshold <- median(chl_values, na.rm = TRUE)
+    Bloom_Frequency <- sum(valid_groups)
+    Max_Diff <- ifelse(mx == max(chl_values), mx - sort(chl_values, decreasing = TRUE)[2], NA_real_)
+    Day_Diff <- day_mx - valid_DOYs[order(valid_chl_values, decreasing = TRUE)[2]]
+    
+    return(list(Threshold = Threshold, CHLmean = CHLmean, mx = mx, day_mx = day_mx, amplitude = amplitude, Bloom_Frequency = Bloom_Frequency, Max_Diff = Max_Diff, Day_Diff = Day_Diff, BArea = BArea))
+  })
+  
+  # Converte l'elenco dei risultati in un data.table
+  result_dt <- rbindlist(results)
+  return(result_dt)
+}
+
+
+```
+
+
+```{r}
+dt <- as.data.table(as.matrix(stack(small)))
+DOYs <- as.numeric(stringr::str_remove(names(chl_mean), "X"))
+
+result <- phenostats_pixel_dt(dt, DOYs)
+
+#result <- phenostats_pixel_dt(dt)
+summary(result)
+
+
+
+```
+
+
+```{r}
+# Converti data.table in matrice
+matrix_result <- as.matrix(result)
+
+# Ridimensiona la matrice alle dimensioni del raster originale
+nrows <- nrow(small[[1]])
+ncols <- ncol(small[[1]])
+reshaped_result <- array(NA, dim = c(nrows, ncols, ncol(matrix_result)))
+
+for (i in 1:ncol(matrix_result)) {
+  reshaped_result[,,i] <- matrix(matrix_result[,i], nrow = nrows, ncol = ncols, byrow = TRUE)
+}
+
+# Crea un RasterBrick dai dati ridimensionati
+raster_result <- brick(reshaped_result)
+
+# Opzionale: assegna i nomi delle colonne di "result" come nomi delle bande in "raster_result"
+names(raster_result) <- names(result)
+
+
+plot(raster_result)
+
+```
+
+
+
+
+```{r}
+
+start_time <- Sys.time()
+dt <- as.data.table(as.matrix(stack(small)))
+
+result <- phenostats_pixel_dt(dt, DOYs)
+
+
+# Converti data.table in matrice
+matrix_result <- as.matrix(result)
+
+# Ridimensiona la matrice alle dimensioni del raster originale
+nrows <- nrow(small[[1]])
+ncols <- ncol(small[[1]])
+reshaped_result <- array(NA, dim = c(nrows, ncols, ncol(matrix_result)))
+
+for (i in 1:ncol(matrix_result)) {
+  reshaped_result[,,i] <- matrix(matrix_result[,i], nrow = nrows, ncol = ncols, byrow = TRUE)
+}
+
+# Crea un RasterBrick dai dati ridimensionati
+raster_result <- brick(reshaped_result)
+
+# Opzionale: assegna i nomi delle colonne di "result" come nomi delle bande in "raster_result"
+names(raster_result) <- names(result)
+plot(raster_result)
+
+end_time <- Sys.time()
+time_takenDT <- end_time - start_time
+time_takenDT
+```
+
+
+
+```{r}
+(ncell(chl_mean) / ncell(small) * time_takenDT) / 60
+
+
+```
+
+
+```{r}
+
+start_time <- Sys.time()
+
+dt <- as.data.table(as.matrix(stack(chl_mean)))
+DOYs <- as.numeric(stringr::str_remove(names(dt), "X"))
+
+result <- phenostats_pixel_dt(dt, DOYs)
+
+
+
+# Converti data.table in matrice
+matrix_result <- as.matrix(result)
+
+# Ridimensiona la matrice alle dimensioni del raster originale
+nrows <- nrow(chl_mean[[1]])
+ncols <- ncol(chl_mean[[1]])
+reshaped_result <- array(NA, dim = c(nrows, ncols, ncol(matrix_result)))
+
+for (i in 1:ncol(matrix_result)) {
+  reshaped_result[,,i] <- matrix(matrix_result[,i], nrow = nrows, ncol = ncols, byrow = TRUE)
+}
+
+# Crea un RasterBrick dai dati ridimensionati
+raster_result <- brick(reshaped_result)
+
+# Opzionale: assegna i nomi delle colonne di "result" come nomi delle bande in "raster_result"
+names(raster_result) <- names(result)
+plot(raster_result)
+
+end_time <- Sys.time()
+time_takenDT <- end_time - start_time
+time_takenDT
+
+
+writeRaster(raster_result, filename = here::here('data', "00-4-4-9_phenostats_pixel_dt.tif"), format = "GTiff", overwrite = TRUE)
+
+
+
+```
+
+
+
+```{r}
+df_dbscan <- result |> mutate(id = 1:nrow(result))
+
+
+db_clean <- df_dbscan |> dplyr::select(-Max_Diff) |> 
+	# filter out row with at least one NA
+	filter_all(any_vars(!is.na(.))) |>
+	filter(!is.na(Day_Diff))
+
+# scale all columns except the id column
+db_clean2 <- db_clean |> dplyr::select(-id) |> 
+	# scale all vars
+	mutate_all(scale) 
+db_clean2$id <- db_clean$id
+
+
+# correlazione tra le variabili
+cor(db_clean2[,-"id"], method = "pearson", use = "pairwise.complete.obs")
+
+
+
+eps_val <- 0.5  # Un valore di esempio, potresti doverlo regolare
+minPts_val <- 50  # Un valore di esempio, potresti doverlo regolare
+
+# sottocampione di 50000 righe
+set.seed(45)
+db_cleanSUB <- db_clean2[sample(nrow(db_clean2), 50000),]
+# usa sb_cleanSUB per trovare i valori ottimali di eps e minPts
+#kNNdistplot(db_cleanSUB[,-c("id", "CHLmean")], k =  20)
+#abline(h = 2, lty = 2)
+eps_val <- 2
+minPts_val <- 20
+# 
+# dbscan_result <- dbscan(db_clean2[,-c("id", "CHLmean")], eps = eps_val, minPts = minPts_val)
+# dbscan_result
+# dbscan_result$borderPoints
+# # Le previsioni (cioè i cluster) per ogni riga sono in dbscan_result$cluster
+# db_clean[, cluster := dbscan_result$cluster]
+# 
+# # Visualizza il risultato
+# head(db_clean)
+# 
+# 
+# summary(db_clean)
+# 
+# out <- data.frame(id = db_clean$id, cluster = db_clean$cluster)
+# 
+# df_dbscan2 <- left_join(df_dbscan,out , by = "id")
+# 
+# df_dbscan2
+# 
+# 
+# 
+# 
+# # Converti data.table in matrice
+# matrix_result <- as.matrix(df_dbscan2$cluster)
+# 
+# # Ridimensiona la matrice alle dimensioni del raster originale
+# nrows <- nrow(chl_mean[[1]])
+# ncols <- ncol(chl_mean[[1]])
+# reshaped_result <- array(NA, dim = c(nrows, ncols, ncol(matrix_result)))
+# 
+# for (i in 1:ncol(matrix_result)) {
+#   reshaped_result[,,i] <- matrix(matrix_result[,i], nrow = nrows, ncol = ncols, byrow = TRUE)
+# }
+# 
+# # Crea un RasterBrick dai dati ridimensionati
+# raster_result <- brick(reshaped_result)
+# 
+# 
+# set.seed(123) # This ensures reproducibility. You can remove this if you want completely random colors every time.
+# random_colors <- sample(colors(), 11)
+# 
+# breakpoints <- seq(minValue(raster_result), maxValue(raster_result), length.out = 12)
+# 
+# plot(raster_result, breaks=breakpoints, col=random_colors, legend=FALSE)
+# plot(raster_result)
+
+```
+
+
+# k-means
+
+```{r}
+
+# elbow method:
+
+set.seed(123) 
+wss <- numeric(15)
+for (k in 1:15) {
+  km_out <- kmeans(db_clean[,-c("id", "CHLmean", "cluster", "mx")], centers = k)
+  wss[k] <- km_out$tot.withinss
+  print(k)
+}
+plot(1:15, wss, type="b", xlab="Number of Clusters", ylab="Within groups sum of squares")
+# 7-8
+# Silhouette method:
+
+# sottocampione di 50000 righe
+set.seed(4451)
+db_cleanSUB <- db_clean2[sample(nrow(db_clean2), 10000),]
+
+
+silhouette_score <- numeric(152)
+for (k in 2:15) {
+  km_out <- kmeans(db_cleanSUB[,-c("id", "CHLmean", "mx")], centers = k)
+  sil <- silhouette(km_out$cluster, dist(db_cleanSUB[,-c("id", "CHLmean")]))
+  silhouette_score[k] <- mean(sil[, 3])
+  print(k)
+}
+plot(2:15, silhouette_score[2:15], type="b", xlab="Number of Clusters", ylab="Average Silhouette Width")
+# 7
+
+
+# gap
+set.seed(1213)
+gap_stat <- clusGap(db_cleanSUB[,-c("id", "CHLmean")], FUN=kmeans, nstart=25, K.max=15, B=50)
+plot(gap_stat, method="Tibs2001SEmax", main="Gap statistic plot")
+
+
+
+# k means
+set.seed(13323) # for reproducibility
+km_result <- kmeans(db_clean[,-c("id", "CHLmean", "mx", "cluster")], centers = 8) 
+km_result
+
+
+
+
+
+out <- data.frame(id = db_clean$id, cluster = km_result$cluster)
+
+
+
+kmeanout <- left_join(df_dbscan,out , by = "id")
+
+
+
+
+# Converti data.table in matrice
+matrix_result <- as.matrix(kmeanout$cluster)
+
+# Ridimensiona la matrice alle dimensioni del raster originale
+nrows <- nrow(chl_mean[[1]])
+ncols <- ncol(chl_mean[[1]])
+reshaped_result <- array(NA, dim = c(nrows, ncols, ncol(matrix_result)))
+
+for (i in 1:ncol(matrix_result)) {
+  reshaped_result[,,i] <- matrix(matrix_result[,i], nrow = nrows, ncol = ncols, byrow = TRUE)
+}
+
+# Crea un RasterBrick dai dati ridimensionati
+raster_result <- brick(reshaped_result)
+
+plot(raster_result)
+
+
+
+
+
+```
+
+
+
+
+# grafico
+
+```{r}
+base <- chl_mean[[4]]
+values(base) <- values(raster_result)
+
+writeRaster(base, filename = here::here("data", "00.4.9_kmeans_8cl.tif"), format = "GTiff", overwrite = TRUE)
+
+
+library(PlotSvalbard)
+data("barents_currents")
+barents_currents
+class(barents_currents)
+plot(barents_currents)
+
+df <- as.data.frame(base, xy = TRUE) |> drop_na()
+
+# Plotta con ggplot2
+ggplot() +
+  geom_raster(data = df, aes(x = x, y = y, fill = X63)) +
+  scale_fill_viridis(limits = c(0, 8), name = "Cluster") +
+  coord_equal(ratio = 4) +
+  theme_few() +
+  labs(title = "CHL mean smoothed", subtitle = "doy 150",
+  		 xlab = "") +
+#		geom_point(data = labs, aes(x = lon, y = lat), colour = "white", size = 5) +
+#	geom_point(data = labs, aes(x = lon, y = lat, colour = lab), size = 4) +
+	scale_colour_viridis(discrete=TRUE) +# to add a scale bar+
+xlab("") + ylab("") +
+	guides(color = "none")+
+	theme(legend.position = "bottom") 
+
+
+
+```
+
+
+
+
+```{r}
+# Estrai i valori dal raster
+values_chl <- getValues(chl_mean)
+
+# Estrai i valori dal raster dei cluster (assumendo che il tuo raster dei cluster si chiami "base")
+values_cluster <- getValues(base)
+
+# Crea un data frame
+df <- data.frame(DOY = rep(60:305, each = ncell(chl_mean)), # Modifica i DOY secondo le tue necessità
+                 Value = as.vector(t(values_chl)), 
+                 Cluster = values_cluster)
+
+
+result <- df %>%
+  group_by(DOY, Cluster) %>%
+  summarize(MeanValue = median(Value, na.rm = TRUE),
+  					)
+
+
+
+ggplot(result, aes(DOY, MeanValue, color = Cluster)) +
+  geom_line() +
+  scale_color_viridis() +
+  theme_few() +
+  labs(title = "CHL mean smoothed", subtitle = "doy 150",
+  		 xlab = "") + facet_wrap(~Cluster, ncol = 3)
+
+
+
+
+
+```
+
+
+# includo xy alla classificazione cluster
+
+
+```{r}
+met <- stack( here::here('data', "00-4-4-9_phenostats_pixel_dt.tif"))
+names(met) <- c("Threshold", "CHLmean", "mx","day_mx", "amplitude", "Bloom_Frequency","Max_diff", "Day_Diff", "BArea")
+df <- as.data.frame(stack(met), xy=TRUE)
+df$id <- 1:nrow(df)
+
+
+df_clean <- df |> 
+	# remove MAx_diff
+	dplyr::select(-c("Max_diff")) |> 
+		filter_all(any_vars(!is.na(.))) |>
+	filter(!is.na(Day_Diff))
+
+
+df_clean2 <- df_clean |> dplyr::select(-id) |> 
+	# scale all vars
+	mutate_all(scale) 
+df_clean2$id <- df_clean$id
+
+
+cor(df_clean2, use = "pair")
+
+
+
+```
+
+
+# n cluster
+```{r}
+
+# elbow method:
+
+set.seed(123) 
+wss <- numeric(45)
+for (k in 1:45) {
+  km_out <- kmeans(df_clean2[, !(names(df_clean2) %in% c("id", "CHLmean", "cluster", "mx"))], centers = k)
+  wss[k] <- km_out$tot.withinss
+  print(k)
+}
+plot(1:45, wss, type="b", xlab="Number of Clusters", ylab="Within groups sum of squares")
+# 7-8
+# Silhouette method:
+```
+
+prendo 13
+
+```{r}
+
+# k means
+set.seed(1333) # for reproducibility
+km_result <- kmeans(df_clean2[, !(names(df_clean2) %in% c("id", "CHLmean", "cluster", "mx"))], centers = 13) 
+km_result
+
+
+
+out <- data.frame(id = df_clean2$id, cluster = km_result$cluster)
+
+
+
+kmeanout <- left_join(df, out , by = "id")
+
+kmeanR <- chl_mean[[56]]
+values(kmeanR) <- kmeanout$cluster
+plot(kmeanR)
+names(kmeanR) <- "cluster"
+
+
+
+writeRaster(kmeanR, filename = here::here("data", "00.4.9_kmeans_13cl.tif"), format = "GTiff", overwrite = TRUE)
+
+
+
+df <- as.data.frame(kmeanR, xy = TRUE) |> drop_na()
+
+# Plotta con ggplot2
+ggplot() +
+  geom_raster(data = df, aes(x = x, y = y, fill = cluster)) +
+  scale_fill_viridis(limits = c(0, 13), name = "Cluster") +
+  coord_equal(ratio = 4) +
+  theme_few() +
+  labs(title = "k-means - spatial", subtitle = "13 classes",
+  		 xlab = "") +
+#		geom_point(data = labs, aes(x = lon, y = lat), colour = "white", size = 5) +
+#	geom_point(data = labs, aes(x = lon, y = lat, colour = lab), size = 4) +
+	scale_colour_viridis(discrete=TRUE) +# to add a scale bar+
+xlab("") + ylab("") +
+	guides(color = "none")+
+	theme(legend.position = "bottom") 
+ggsave(here::here("out", "00.4.4.9_kmeans_13cl.png"), width = 12, height = 8, dpi = 300)
+```
+
+
+
+
+```{r height=8, width=12}
+
+kmeanR <- stack(here::here("data", "00.4.9_kmeans_13cl.tif"))
+chl_mean <- stack(here::here("R", "CHL_mean_smoothed.nc"))
+
+
+
+
+
+library(dtplyr)
+library(dplyr)
+
+dout <- as.data.frame(chl_mean)
+dK <- as.data.frame(kmeanR)
+
+dout <- cbind(dout, dK) 
+
+dl <- dout |> pivot_longer(cols = 1:(ncol(dout) - 1), names_to = "column", values_to = "Value") 
+
+dl <- dl |> mutate(DOY = as.numeric(stringr::str_remove(column, "X"))) |> dplyr::select(-column)
+
+dlt <- data.table(df = dl)
+names(dlt)[1] <- "df.cluster"
+
+out <- dlt |> group_by(df.cluster, df.DOY) |> 
+	summarise(ave = mean(df.Value, na.rm = TRUE), 
+						sd = sd(df.Value, na.rm = TRUE))
+
+
+ggplot(as.data.frame(out), aes(df.DOY, ave, color = factor(df.cluster))) +
+	geom_ribbon(aes(ymin = ave - sd, ymax = ave + sd), alpha = 0.5, colour = NA) +
+  geom_line() +
+  scale_color_viridis(discrete = T) +
+	#  scale_colour_manual(values = random_colors) +
+#scale_fill_manual(values = random_colors) +
+	facet_wrap(~df.cluster, ncol = 4, scale = "free_y") +
+  theme_few() +
+  labs(title = "CHL mean smoothed", subtitle = "cluster phenometrics",
+  		 xlab = "") + 
+	#facet_wrap(~Cluster, ncol = 3) +
+	coord_cartesian(xlim = c(70, 300)) +
+	# remove legend
+	guides(color = "none")
+
+ggsave(here::here('out', '00.4.4.9_kmeans_13cl_pnenometrics_TREND.png'), width = 12, height = 8, dpi = 300)
+
+
+
+
+```
+
+
+
+
