@@ -40,3 +40,20 @@ vignettes/*.pdf
 
 # all files in data
 data/*
+
+# all png 
+*/*.png
+
+# htmls from markdowns & quarto
+*/*.html
+*.pdf
+
+# csv from markdowns & quarto
+*/*.csv
+*.csv
+
+*/*.docx
+
+*/*.nc
+
+*/*.xml
