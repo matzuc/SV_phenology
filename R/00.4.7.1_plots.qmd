@@ -1,0 +1,208 @@
+---
+title: "Metriche fenologiche"
+author: "mz"
+format: html
+Rendering:
+  embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Librerie
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(dtplyr)
+library(ggplot2)
+library(ggthemes)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(data.table)
+library(cluster)
+library(PlotSvalbard)
+library(lubridate)
+library(purrr)
+```
+
+## Dati 
+
+carico i dati
+
+
+
+# carico i dataset di chl
+
+
+
+```{r}
+
+  
+ out13  <- read.csv(here::here("out", paste0("00.4.9_kmeans_13cl_ts" , ".csv"))) |> mutate(date = as_date(date))
+  out20<- read.csv(here::here("out", paste0("00.4.9_kmeans_20cl_ts" , ".csv"))) |> mutate(date = as_date(date))
+  
+
+  
+```
+
+# funzione metriche
+```{r}
+integrate_numeric <- function(x, y) {
+  n <- length(y)
+  
+  if (n %% 2 == 0) {
+    # Trapezoidal rule for even number of points
+    h <- diff(x)
+    return(sum(h * (y[-1] + y[-length(y)]) / 2))
+  } else {
+    # Simpson's rule for odd number of points
+    h <- (max(x) - min(x)) / (n - 1)
+    return(h / 3 * (y[1] + y[n] + 4 * sum(y[seq(2, n - 1, 2)]) + 2 * sum(y[seq(3, n - 2, 2)])))
+  }
+}
+
+
+phenostats <- function(es){
+  es |> 
+  group_by(year) |>
+  mutate(
+    # Calcola la soglia per ogni anno
+    thr = median(CHL, na.rm = T) * 1.05,
+    above_threshold = ifelse(!is.na(CHL) & CHL > thr, 1, 0),
+    change = (lag(above_threshold, default = 0) != above_threshold) & 
+             !is.na(lag(CHL, default = CHL[1])) & 
+             !is.na(CHL),
+    group_temp = cumsum(change)
+  ) |> 
+  mutate(group = with(rle(above_threshold), rep(seq_along(lengths), lengths))) %>%
+  group_by(year, group) %>%
+  filter(any(above_threshold == 1)) %>%
+  # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+  filter((max(doy) - min(doy) + 1) >= 14) %>%
+  summarize(
+    start_doy = min(doy),
+    end_doy = max(doy),
+    mx = max(CHL, na.rm = TRUE),
+    day_mx = doy[which.max(CHL)],
+    amplitude = mx - thr[1],
+    BArea = integrate_numeric(x = doy, y = CHL)
+  ) |> 
+  ungroup() %>%
+  mutate(
+    group = row_number()
+  ) |>
+  group_by(year) |> 
+  mutate(
+    maxbloom = ifelse(mx == max(mx), 1, 0),
+    CHLmean = mean(es$CHL[es$year == unique(year)], na.rm = TRUE),
+    Threshold = median(es$CHL[es$year == unique(year)], na.rm = TRUE),
+    Area_total = integrate_numeric(x = es$doy[!is.na(es$CHL) & es$year == unique(year)], 
+                                   y = es$CHL[!is.na(es$CHL) & es$year == unique(year)]),
+    Bloom_Frequency = n(),
+    Max_Diff = if_else(row_number() == 1, mx - nth(mx, 2), NA_real_),
+    Day_Diff = if_else(row_number() == 1, nth(day_mx, 2) - day_mx, 290)
+  ) |> 
+  filter(maxbloom == 1) |> 
+  dplyr::select(-maxbloom) 
+}
+
+```
+
+
+
+```{r}
+df <- out13 |> mutate(year = year(date), doy = yday(date), CHL = ave) 
+```
+
+applico la funzione
+
+
+```{r}
+total <- df |> 
+  group_by(cluster13) |> 
+  group_split() |> 
+  map_dfr(function(data) {
+    res <- phenostats(data)
+    res$cluster13 <- unique(data$cluster13)
+    return(res)
+  })
+
+
+
+ met_long <- total |> 
+      pivot_longer(cols = c("Area_total", "Bloom_Frequency", "Max_Diff", "Day_Diff", "day_mx", "amplitude", "BArea", "Threshold", "Bloom_Frequency", "start_doy"), names_to = "metric", values_to = "value")
+
+```
+
+
+```{r}
+ggplot(met_long, aes(year, value, colour = factor(cluster13))) +
+	geom_point(size = 0.5) +
+	geom_line(alpha = 0.5, lty = 1) +
+	facet_grid(metric ~ cluster13, scale  = "free_y") +
+		theme(legend.position = "bottom") +
+	scale_color_viridis(discrete=TRUE) +
+	#geom_smooth(se = F, size = 0.6) +
+	theme_few() +
+	#geom_smooth(method = "lm", se = F, size = 0.6) +
+	# xlab verticali
+	theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+	#legenda sul fondo
+	theme(legend.position = "bottom")
+
+ggsave(here::here("out", paste0("00.4.7.1_kmeans_13cl_ts_phenostats" , ".png")), width = 20, height = 20, units = "cm", dpi = 300) 
+
+
+```
+
+
+
+
+
+```{r}
+df <- out20 |> mutate(year = year(date), doy = yday(date), CHL = ave) 
+```
+
+applico la funzione
+
+
+```{r}
+total <- df |> 
+  group_by(cluster20) |> 
+  group_split() |> 
+  map_dfr(function(data) {
+    res <- phenostats(data)
+    res$cluster20 <- unique(data$cluster20)
+    return(res)
+  })
+
+
+
+ met_long <- total |> 
+      pivot_longer(cols = c("Area_total", "Bloom_Frequency", "Max_Diff", "Day_Diff", "day_mx", "amplitude", "BArea", "Threshold", "Bloom_Frequency", "start_doy"), names_to = "metric", values_to = "value")
+
+```
+
+
+```{r}
+ggplot(met_long, aes(year, value, colour = factor(cluster20))) +
+	geom_point(size = 0.5) +
+	geom_line(alpha = 0.5, lty = 1) +
+	facet_grid(metric ~ cluster20, scale  = "free_y") +
+		theme(legend.position = "bottom") +
+	scale_color_viridis(discrete=TRUE) +
+	#geom_smooth(se = F, size = 0.6) +
+	theme_few() +
+	#geom_smooth(method = "lm", se = F, size = 0.6) +
+	# xlab verticali
+	theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) 
+
+ggsave(here::here("out", paste0("00.4.7.1_kmeans_20cl_ts_phenostats" , ".png")), width = 24, height = 20, units = "cm", dpi = 300)
+
+
+```
+
+

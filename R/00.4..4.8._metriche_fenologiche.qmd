@@ -1,0 +1,412 @@
+---
+title: "Metriche fenologiche"
+author: "mz"
+format: html
+Rendering:
+  embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+## Librerie
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+```
+
+## Dati esempio
+
+Carico i dati precedentemente salvati
+
+```{r}
+# carico data/04.2_curve4points.csv
+df2 <- read.csv(here::here("data", "04.2_curve4points.csv"), sep = ",", dec = ".")
+df2 <- df2 |> mutate(time = as_date(time), doy = yday(as_date(time))) |> mutate(year = year(time))
+
+
+labs <- df2 |> group_by(lab) |> summarise(lat = mean(latitude), lon = mean(longitude)) |> ungroup()
+
+```
+
+
+```{r}
+chl_mean <- stack(here::here("R",  "CHL_mean_smoothed.nc"))
+```
+
+valori nei 4 punti
+
+```{r}
+# Estrai i doy dai nomi dei layer
+doy_values <- str_sub(names(chl_mean), 2, str_length(names(chl_mean))) |> as.numeric()
+
+# labs spatial -
+labSP <- labs |> st_as_sf(coords = c("lon", "lat"), crs = 4326)
+
+# Estrai i valori dai punti
+values <- extract(chl_mean, labSP)
+
+# Converti in un data frame
+df <- data.frame(chl = unlist(values),
+                 doy = rep(doy_values, each = nrow(labs)),
+                 lon = rep(labs$lon, times = length(doy_values)),
+                 lat = rep(labs$lat, times = length(doy_values)),
+                 lab = rep(labs$lab, times = length(doy_values)))
+
+df_clim <- data.frame(lab = NA, lon = NA, lat = NA, doy = NA, CHL = NA)[0, ]
+
+for(i in 1:4){
+	l <- labs[i,]
+	labSP <- l |> st_as_sf(coords = c("lon", "lat"), crs = 4326)
+	values <- extract(chl_mean, labSP)
+	
+	t <- data.frame(lab = l$lab, lon = l$lon, lat = l$lat, doy = doy_values, CHL = t(values))
+									
+	df_clim <- rbind(df_clim, t)
+	rm(t)
+	rm(values)
+	print(i)
+}
+
+
+
+```
+
+
+```{r}
+ggplot(df_clim, aes(doy, CHL)) +
+	geom_line(aes(colour = lab)) +
+	#facet_wrap(~year, ncol = 5, scale  = "free_y") +
+	theme_few() +
+	# lgend as horizontal
+	theme(legend.position = "bottom") +
+	scale_color_viridis(discrete=TRUE) +
+	ggtitle("Mean yearly cycle")
+
+```
+
+
+# calcoli
+
+esempio calcolo delle metriche per 1 picco
+
+```{r}
+es <- df_clim |> filter(lab == "1.78_75.4")
+
+thr <- median(es$CHL, na.rm = T) * 1.05
+
+
+integrate_numeric <- function(x, y) {
+  n <- length(y)
+  
+  if (n %% 2 == 0) {
+    # Trapezoidal rule for even number of points
+    h <- diff(x)
+    return(sum(h * (y[-1] + y[-length(y)]) / 2))
+  } else {
+    # Simpson's rule for odd number of points
+    h <- (max(x) - min(x)) / (n - 1)
+    return(h / 3 * (y[1] + y[n] + 4 * sum(y[seq(2, n - 1, 2)]) + 2 * sum(y[seq(3, n - 2, 2)])))
+  }
+}
+
+
+#es <- data.frame(doy = 1:20, CHL = c(0, NA, NA, 0, 0, 0, 1, NA, 1, 0, 0 , 0 , 0, 0, 1, 1, 1, 0, 0, 0))
+es
+es2 <- es |> 
+  arrange(doy) |> 
+  mutate(
+    above_threshold = ifelse(!is.na(CHL) & CHL > thr, 1, 0),
+    change = (lag(above_threshold, default = 0) != above_threshold) & 
+             !is.na(lag(CHL, default = CHL[1])) & 
+             !is.na(CHL),
+    group_temp = cumsum(change)
+  ) |> 
+  mutate(group = with(rle(above_threshold), rep(seq_along(lengths), lengths))) %>%
+  group_by(group) %>%
+  filter(any(above_threshold == 1)) %>%
+  # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+  filter((max(doy) - min(doy) + 1) >= 14) %>%
+  summarize(
+    start_doy = min(doy),
+    end_doy = max(doy),
+    mx = max(CHL, na.rm = TRUE),
+    day_mx = doy[which.max(CHL)],
+    amplitude = mx - thr,
+    BArea = integrate_numeric(x = doy, y = CHL)
+  ) |> 
+  ungroup() %>%
+  mutate(
+    group = row_number(),
+    maxbloom = ifelse(mx == max(mx), 1, 0)
+  )
+
+
+out <-  es2 |> 
+arrange(-mx) |> 
+  mutate(
+    CHLmean = mean(es$CHL, na.rm = TRUE),
+    Threshold = thr,
+    Area_total = integrate_numeric(x = es$doy[!is.na(es$CHL)], y = es$CHL[!is.na(es$CHL)]),
+    Bloom_Frequency = n(),
+    Max_Diff = if_else(row_number() == 1, mx - nth(mx, 2), NA_real_),
+    Day_Diff = if_else(row_number() == 1, nth(day_mx, 2) - day_mx, 290)
+  ) |> 
+	filter(maxbloom == 1) |> 
+  dplyr::select(-maxbloom) 
+
+out
+
+
+
+
+arrow_start <- out$day_mx[1]
+arrow_end <- arrow_start + out$Day_Diff[1]
+arrow_midpoint <- (arrow_start + arrow_end) / 2
+arrow_base <- min(es$CHL, na.rm = TRUE) - 0.1 * (max(es$CHL, na.rm = TRUE) - min(es$CHL, na.rm = TRUE))
+
+
+ggplot(es, aes(doy, CHL)) +
+	geom_line() +
+	#facet_wrap(~year, ncol = 5, scale  = "free_y") +
+	geom_ribbon(aes(ymin = ifelse(CHL > thr, thr, NA), ymax = CHL), fill = "darkgreen", alpha = 0.5) +
+	theme_few() +
+	geom_hline(yintercept = thr, linetype = "dotted", colour = "grey") +
+	
+	geom_segment(data = es2, aes(x = start_doy, xend = end_doy, y = thr, yend = thr), colour = "blue", size = 1) +
+		geom_segment(data = es2, aes(x = day_mx , xend = day_mx , y = thr, yend = mx), colour = "blue", size = 0.7, lty = 2) +
+		geom_segment(data = filter(es2, maxbloom == 1), aes(x = start_doy, xend = end_doy, y = thr, yend = thr), colour = "red", size = 1) +
+		geom_segment(data = filter(es2, maxbloom == 1), aes(x = day_mx , xend = day_mx , y = thr, yend = mx), colour = "red", size = 0.7, lty = 2) +
+	geom_text(data = es2, aes(x = start_doy,  y = mx, label = paste0("Bloom n. ", group)))+
+	
+	
+  geom_segment(aes(x = arrow_midpoint, xend =arrow_start , y = arrow_base, yend = arrow_base), 
+               arrow = arrow(type = "closed", length = unit(0.08, "inches")), color = "black") +
+  geom_segment(aes(x = arrow_midpoint , xend = arrow_end, y = arrow_base, yend = arrow_base), 
+               arrow = arrow(type = "closed", length = unit(0.08, "inches")), color = "black") +
+  geom_text(aes(x = arrow_midpoint, y = arrow_base, label = paste0("Day Diff: ", out$Day_Diff[1])),
+            vjust = -1)
+
+
+
+
+
+
+
+
+```
+
+
+oro provo a farlo per una serie intera
+
+
+*funzione per fare i calcoli*
+```{r}
+phenostats <- function(es){
+  es |> 
+  group_by(year) |>
+  mutate(
+    # Calcola la soglia per ogni anno
+    thr = median(CHL, na.rm = T) * 1.05,
+    above_threshold = ifelse(!is.na(CHL) & CHL > thr, 1, 0),
+    change = (lag(above_threshold, default = 0) != above_threshold) & 
+             !is.na(lag(CHL, default = CHL[1])) & 
+             !is.na(CHL),
+    group_temp = cumsum(change)
+  ) |> 
+  mutate(group = with(rle(above_threshold), rep(seq_along(lengths), lengths))) %>%
+  group_by(year, group) %>%
+  filter(any(above_threshold == 1)) %>%
+  # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+  filter((max(doy) - min(doy) + 1) >= 14) %>%
+  summarize(
+    start_doy = min(doy),
+    end_doy = max(doy),
+    mx = max(CHL, na.rm = TRUE),
+    day_mx = doy[which.max(CHL)],
+    amplitude = mx - thr[1],
+    BArea = integrate_numeric(x = doy, y = CHL)
+  ) |> 
+  ungroup() %>%
+  mutate(
+    group = row_number()
+  ) |>
+  group_by(year) |> 
+  mutate(
+    maxbloom = ifelse(mx == max(mx), 1, 0),
+    CHLmean = mean(es$CHL[es$year == unique(year)], na.rm = TRUE),
+    Threshold = median(es$CHL[es$year == unique(year)], na.rm = TRUE),
+    Area_total = integrate_numeric(x = es$doy[!is.na(es$CHL) & es$year == unique(year)], 
+                                   y = es$CHL[!is.na(es$CHL) & es$year == unique(year)]),
+    Bloom_Frequency = n(),
+    Max_Diff = if_else(row_number() == 1, mx - nth(mx, 2), NA_real_),
+    Day_Diff = if_else(row_number() == 1, nth(day_mx, 2) - day_mx, 290)
+  ) |> 
+  filter(maxbloom == 1) |> 
+  dplyr::select(-maxbloom) 
+}
+
+
+```
+
+testo la funzione
+
+```{r}
+test <- es |> mutate(year = 2002) |> phenostats()
+test
+out
+
+
+```
+da gli stessi risultati, provo su una vera serie
+
+
+
+
+```{r}
+dataset <- df2 |> filter(lab == "1.78_75.4")
+
+output <- dataset |> phenostats()
+output
+```
+
+
+
+
+## Grafico
+
+
+
+
+```{r}
+ggplot(df2, aes(doy, CHL)) +
+	geom_line(aes(colour = lab)) +
+	facet_wrap(~year, ncol = 5, scale  = "free_y") +
+	theme_few() +
+	# lgend as horizontal
+	theme(legend.position = "bottom") +
+	scale_color_viridis(discrete=TRUE) +
+	ggtitle("Time series") 
+
+```
+
+
+
+# grafico con metriche
+
+
+
+```{r}
+merged_data <- dataset |> 
+  left_join(output[, c("year", "Threshold")], by = "year")
+
+# Crea il grafico
+ggplot(merged_data, aes(doy, CHL)) +
+  geom_line() +
+  facet_wrap(~year, ncol = 5, scale  = "free_y") +
+  theme_few() +
+  # Legenda in orizzontale
+  theme(legend.position = "bottom") +
+  scale_color_viridis(discrete=TRUE) +
+  ggtitle("Time series") +
+  geom_hline(data = output, aes(yintercept = Threshold), linetype = "dotted", colour = "grey") +
+  # Aggiungi il ribbon
+  geom_ribbon(aes(ymin = ifelse(CHL > Threshold, Threshold, NA), ymax = CHL), fill = "darkgreen", alpha = 0.5) +
+	
+		geom_segment(data = output, aes(x = start_doy, xend = end_doy, y = Threshold, yend = Threshold), colour = "blue", size = 1) +
+	
+geom_segment(data = output, aes(x = day_mx , xend = day_mx , y = Threshold, yend = mx), colour = "blue", size = 0.7, lty = 2) 
+```
+
+
+andamento metriche
+
+```{r}
+ met_long <- output |> 
+	  pivot_longer(cols = c("Area_total", "Bloom_Frequency", "Max_Diff", "Day_Diff", "day_mx", "amplitude", "BArea", "Threshold", "Bloom_Frequency", "start_doy"), names_to = "metric", values_to = "value")
+
+ggplot(met_long, aes(year, value)) +
+	geom_point() +
+	facet_wrap(~metric, ncol = 3, scale  = "free_y")
+
+
+```
+
+
+ora vedo per i 4 punti
+
+
+```{r}
+
+# usa la funzione phenostats su df2 per applicarla per ogni lab e ricombina i risultati
+total <- df2 |> 
+  group_by(lab) |> 
+  group_split() |> 
+  map_dfr(function(data) {
+    res <- phenostats(data)
+    res$lab <- unique(data$lab)
+    return(res)
+  })
+
+
+
+ met_long <- total |> 
+	  pivot_longer(cols = c("Area_total", "Bloom_Frequency", "Max_Diff", "Day_Diff", "day_mx", "amplitude", "BArea", "Threshold", "Bloom_Frequency", "start_doy"), names_to = "metric", values_to = "value")
+
+ggplot(met_long, aes(year, value, colour = lab)) +
+	geom_point() +
+	geom_line(alpha = 0.5, lty = 1) +
+	facet_wrap(~metric, ncol = 3, scale  = "free_y") +
+		theme(legend.position = "bottom") +
+	scale_color_viridis(discrete=TRUE) +
+	#geom_smooth(se = F, size = 0.6) +
+	theme_few()
+
+```
+
+
+
+
+
+```{r}
+# seleziona chl_mean doy 150
+
+
+doy140 <- chl_mean[[140]]
+# par(mfrow=c(1,1))
+# par(mar=c(5,4,4,2)+0.1)
+# plot(doy140)
+
+# plot doy 150 di chl_mean
+
+df <- as.data.frame(doy140, xy = TRUE) |> drop_na()
+
+# Plotta con ggplot2
+ggplot() +
+  geom_raster(data = df, aes(x = x, y = y, fill = X199)) +
+  scale_fill_viridis(option = "magma", limits = c(0, 5), name = "Chl-a mg/m3") +
+  coord_equal(ratio = 4) +
+  theme_few() +
+  labs(title = "CHL mean smoothed", subtitle = "doy 150",
+  		 xlab = "") +
+		geom_point(data = labs, aes(x = lon, y = lat), colour = "white", size = 5) +
+	geom_point(data = labs, aes(x = lon, y = lat, colour = lab), size = 4) +
+	scale_color_viridis(discrete=TRUE) +# to add a scale bar+
+xlab("") + ylab("") +
+	guides(color = "none")+
+	theme(legend.position = "bottom") 
+
+```
+
+
