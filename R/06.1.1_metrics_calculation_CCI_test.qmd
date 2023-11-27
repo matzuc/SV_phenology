@@ -1,0 +1,257 @@
+---
+title: "Metrics on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+library(data.table)
+```
+
+```{r}
+cppFunction('
+double integrate_numeric(NumericVector x, NumericVector y) {
+  int n = y.size();
+
+  if (n % 2 == 0) {
+    // Trapezoidal rule for even number of points
+    double sum = 0.0;
+    for(int i = 0; i < n - 1; i++) {
+      double h = x[i + 1] - x[i];
+      sum += h * (y[i] + y[i + 1]) / 2;
+    }
+    return sum;
+  } else {
+    // Simpson s rule for odd number of points
+    double h = (max(x) - min(x)) / (n - 1);
+    double sum1 = 0.0;
+    double sum2 = 0.0;
+    for(int i = 1; i < n - 1; i += 2) {
+      sum1 += y[i];
+    }
+    for(int i = 2; i < n - 2; i += 2) {
+      sum2 += y[i];
+    }
+    return h / 3 * (y[0] + y[n - 1] + 4 * sum1 + 2 * sum2);
+  }
+}
+')
+```
+
+# Dataset
+load the CCI climatology
+
+D:\Dropbox\R_projects\SV_phenology\data\CDS\daily_smoothed\CDS_daily_smoothed_rel.nc
+
+```{r}
+cci <- stack(here::here('data/cds/daily_smoothed', 'CDS_daily_smoothed_rel.nc'))
+cci
+```
+
+convert to a data frame
+
+```{r}
+test_df <- as.data.frame(cci, xy = TRUE)
+df_l <- test_df |>  
+  pivot_longer(cols = -c(x, y), names_to = 'name', values_to = 'CHL') |> 
+	# extract doy removing the first character
+	mutate(doy = as.numeric(str_sub(name, 2, str_length(name)))
+				 
+				 ) 
+	
+
+dl_fsel <- df_l |> group_by(x, y) |> summarise(n = n()) |> 
+	# sample 25 points
+	sample_n(size = 25, weight = n, replace = TRUE) |> 
+	mutate(sel = 1)
+
+df2 <- df_l |> left_join(dl_fsel, by = c('x', 'y')) |> 
+	filter(sel == 1) 
+
+```
+
+
+
+
+creo una funziona
+
+```{r}
+blooms_dt <- function(subs) {
+# Assicurati che 'subs' sia un data.table
+setDT(subs)
+subs2 <- copy(subs)  # Crea una copia se non vuoi modificare 'subs' originali
+subs2[, year := 2014]  # Aggiungi la colonna 'year'
+
+# Ordinamento e creazione iniziale di 'above_threshold'
+es2 <- subs2[, .SD[order(doy)], by = .(x, y, year)]
+es2 <- es2[, thr := median(CHL, na.rm = TRUE) * 1.05, by = .(x, y, year)]
+es2[, above_threshold := fifelse(!is.na(CHL) & CHL > thr, 1L, 0L), by = .(x, y, year)]
+# 
+
+# Calcola 'group' usando rleid e esegui le operazioni di filtraggio e riassunto
+es2[, group2 := rleid(above_threshold), by = .(x, y, year)]
+
+
+es2[, group_length := .N, by = .(x, y, year, group2)]
+
+
+check_groups <- es2[, .(above_threshold = min(above_threshold),
+												length = min(group_length)), by = .(x, y, year, group2)]
+
+
+
+# attenzione: qui unisco gruppi con buchi sotto soglia di lunghezza <= 3
+#identifico i gruppi da unire
+check_groups[, to_merge := fifelse(above_threshold == 0 & length <= 3 &
+                          shift(above_threshold, type = "lag") == 1 &
+                          shift(above_threshold, type = "lead") == 1, 1L, 0L),
+    by = .(x, y, year)]
+
+check_groups[, above_corrected := fifelse(to_merge == 1, 1L, above_threshold),]
+check_groups[, group3 := rleid(above_corrected ), by = .(x, y, year)]
+# remove columns 6:7
+check_groups[, c("above_threshold", "length", "to_merge") := NULL]
+
+
+# merge to es2 (left join)
+es2 <- merge(es2, check_groups, by = c("x", "y", "year", "group2"), allow.cartesian=TRUE)
+
+# ricalcolo il numero di giorni per ogni gruppo
+es2[, group_length := .N, by = .(x, y, year, group3)]
+
+# Filtrare i gruppi in base alle condizioni
+filtered_groups <- es2[above_corrected == 1 & group_length >= 15]
+
+
+# filtro i gruppi above_threshold, lunghi almeno 14 giorni
+es_filtered <- filtered_groups[, .(
+  start_doy = min(doy),
+  end_doy = max(doy),
+  mx = max(CHL, na.rm = TRUE),
+  day_mx = doy[which.max(CHL)],
+  
+  BArea = integrate_numeric(x = doy, y = CHL)
+), by = .(year, x, y, group3)]
+
+
+es_filtered[, peak_id := rleid(group3), by = .(x, y, year)]
+
+
+es3 <- merge(es2, es_filtered, by = c("x", "y", "year", "group3"))
+
+es3[, CHLmean := mean(CHL, na.rm = TRUE), by = .(x, y, year)]
+es3[, Barea_total := integrate_numeric(x = doy, y = CHL), by = .(x, y, year)]
+
+
+peaks <- es3[, .(
+	start_doy = min(start_doy, na.rm = TRUE),
+	end_doy = max(end_doy, na.rm = TRUE),
+	
+  mx = min(mx, na.rm = TRUE),
+  day_mx = min(day_mx, na.rm = TRUE),
+  BArea = max(BArea, na.rm = TRUE),
+  Barea_total = max(Barea_total, na.rm = TRUE),
+  CHLmean = min(CHLmean, na.rm = TRUE),
+	thr = min(thr, na.rm = TRUE)
+), by = .(x, y, year, peak_id)]
+
+
+
+setorder(peaks, x, y, year, -mx)
+
+# Calcolare le metriche per ogni gruppo
+peaks_summary <- peaks[, .(
+  start_doy = start_doy[1], 
+  end_doy = end_doy[1], 
+  mx = mx[1], 
+  day_mx = day_mx[1], 
+  BArea = BArea[1], 
+  CHLmean = CHLmean[1], 
+  thr = mean(thr),  # Assicurati che 'thr' sia presente nel tuo data.table
+  BArea_total = Barea_total[1],
+  # = mx[1] - thr[1],
+  Bloom_Frequency = .N,
+  Max_Diff = if (.N > 1) mx[1] - mx[2] else NA_real_,
+  Day_Diff = if (.N > 1) day_mx[2] - day_mx[1] else NA_real_,
+  Day_Start_First = start_doy[which.min(start_doy)],
+  Day_End_First = end_doy[which.min(start_doy)]
+), by = .(x, y, year)]
+
+# calcolo alcune metriche che mancano
+peaks_summary[, amplitude := mx - thr, ]
+
+
+es2[, days_in_group := .N, by = .(x, y, year)]
+
+# Filtrare per tenere solo gli ultimi 15 giorni di ogni gruppo
+es2_filtered <- es2[days_in_group > (days_in_group - 35)]
+
+# Calcolare la media della clorofilla per questi giorni
+es2_means <- es2_filtered[, .(CHL_mean_last_35 = mean(CHL, na.rm = TRUE)), by = .(x, y, year)]
+
+
+
+
+peaks_summary <- merge(peaks_summary, es2_means, by = c("x", "y", "year"))
+
+#Max_Diff Day_Diff set to 0 if NA
+peaks_summary[is.na(Max_Diff), Max_Diff := 0]
+peaks_summary[is.na(Day_Diff), Day_Diff := 0]
+
+    # Restituire il risultato finale
+    return(peaks_summary)
+}
+```
+
+
+
+confronto con dplyr
+
+
+```{r}
+
+df3 <- df2 |> mutate(year = 999)
+
+
+resDT <- blooms_dt(df3)
+
+
+
+ggplot(df3, aes(doy, CHL)) +
+	geom_line() +
+	theme_few() +
+	facet_wrap(~ x + y, ncol = 1) +
+	# dont preinr facet title
+	theme(strip.text = element_blank()) +
+	geom_hline(data = resDT, aes(yintercept = thr), linetype = "dashed", color = "red") +
+	geom_point(data = resDT, aes(x = day_mx, y = mx), color = "red") +
+	geom_point(data = resDT, aes(x = day_mx + Day_Diff , y = mx - Max_Diff), color = "red") 
+
+
+```
+

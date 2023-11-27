@@ -1,0 +1,668 @@
+---
+title: "Metrics on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+library(data.table)
+```
+
+```{r}
+cppFunction('
+double integrate_numeric(NumericVector x, NumericVector y) {
+  int n = y.size();
+
+  if (n % 2 == 0) {
+    // Trapezoidal rule for even number of points
+    double sum = 0.0;
+    for(int i = 0; i < n - 1; i++) {
+      double h = x[i + 1] - x[i];
+      sum += h * (y[i] + y[i + 1]) / 2;
+    }
+    return sum;
+  } else {
+    // Simpson s rule for odd number of points
+    double h = (max(x) - min(x)) / (n - 1);
+    double sum1 = 0.0;
+    double sum2 = 0.0;
+    for(int i = 1; i < n - 1; i += 2) {
+      sum1 += y[i];
+    }
+    for(int i = 2; i < n - 2; i += 2) {
+      sum2 += y[i];
+    }
+    return h / 3 * (y[0] + y[n - 1] + 4 * sum1 + 2 * sum2);
+  }
+}
+')
+```
+
+# Dataset
+load the CCI climatology
+
+D:\Dropbox\R_projects\SV_phenology\data\CDS\daily_smoothed\CDS_daily_smoothed_rel.nc
+
+```{r}
+cci <- stack(here::here('data/cds/daily_smoothed', 'CDS_daily_smoothed_rel.nc'))
+cci
+```
+
+pich a smaller area as a test, with limits:
+-5 - 5 / 72 82
+
+```{r}
+test <- crop(cci, extent(-5, 5, 72, 74.5))
+test
+```
+plot the layer 50
+with viridis palette
+
+```{r}
+plot(test[[50]], col = viridis(100)); title(main = paste0('CCI Chl a ', names(test)[50]))
+```
+
+convert to a data frame
+
+```{r}
+test_df <- as.data.frame(test, xy = TRUE)
+df_l <- test_df |>  
+  pivot_longer(cols = -c(x, y), names_to = 'name', values_to = 'CHL') |> 
+	# extract doy removing the first character
+	mutate(doy = as.numeric(str_sub(name, 2, str_length(name)))) 
+	
+```
+
+plot just one point
+
+```{r}
+subs <- df_l |> filter(x == df_l$x[127500] & y == df_l$y[127500])
+subs <- df_l |> filter(x == df_l$x[117500] & y == df_l$y[117500])
+
+```
+
+now I compute the metrics
+ 
+```{r}
+
+thr <- median(subs$CHL, na.rm = TRUE) * 1.05
+
+
+es2 <- subs |> 
+  arrange(doy) |> 
+  mutate(
+    above_threshold = ifelse(!is.na(CHL) & CHL > thr, 1, 0),
+    change = (lag(above_threshold, default = 0) != above_threshold) & 
+             !is.na(lag(CHL, default = CHL[1])) & 
+             !is.na(CHL),
+    group_temp = cumsum(change)
+  ) |> 
+  mutate(group = with(rle(above_threshold), rep(seq_along(lengths), lengths))) %>%
+  group_by(group) %>%
+  filter(any(above_threshold == 1)) %>%
+  # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+  filter((max(doy) - min(doy) + 1) >= 14) %>%
+  summarize(
+    start_doy = min(doy),
+    end_doy = max(doy),
+    mx = max(CHL, na.rm = TRUE),
+    day_mx = doy[which.max(CHL)],
+    amplitude = mx - thr,
+    BArea = integrate_numeric(x = doy, y = CHL)
+  ) |> 
+  ungroup() %>%
+  mutate(
+    group = row_number(),
+    maxbloom = ifelse(mx == max(mx), 1, 0)
+  )
+
+es2
+
+out <-  es2 |> 
+arrange(-mx) |> 
+  mutate(
+    CHLmean = mean(subs$CHL, na.rm = TRUE),
+    Threshold = thr,
+    Area_total = integrate_numeric(x = subs$doy[!is.na(subs$CHL)], y = subs$CHL[!is.na(subs$CHL)]),
+    Bloom_Frequency = n(),
+    Max_Diff = if_else(row_number() == 1, mx - nth(mx, 2), NA_real_),
+    Day_Diff = if_else(row_number() == 1, nth(day_mx, 2) - day_mx, 290)
+  ) |> 
+	arrange(group) |> 
+	mutate(doy_start_first = start_doy[1],
+				 doy_end_first = end_doy[1]) |> 
+
+    filter(maxbloom == 1) |> 
+  dplyr::select(-maxbloom) |> 
+	rename(peak = group)
+
+out
+```
+ 
+ 
+ 
+ 
+
+
+```{r}
+arrow_start <- out$day_mx[1]
+arrow_end <- arrow_start + out$Day_Diff[1]
+arrow_midpoint <- (arrow_start + arrow_end) / 2
+arrow_base <- min(subs$CHL, na.rm = TRUE) - 0.1 * (max(subs$CHL, na.rm = TRUE) - min(subs$CHL, na.rm = TRUE))
+
+thr <- median(subs$CHL, na.rm = T) * 1.05
+
+
+ggplot(subs, aes(doy, CHL)) +
+    geom_line() +
+    #facet_wrap(~year, ncol = 5, scale  = "free_y") +
+    geom_ribbon(aes(ymin = ifelse(CHL > thr, thr, NA), ymax = CHL), fill = "darkgreen", alpha = 0.5) +
+    theme_few() +
+    geom_hline(yintercept = thr, linetype = "dotted", colour = "grey") +
+    
+    geom_segment(data = es2, aes(x = start_doy, xend = end_doy, y = thr, yend = thr), colour = "blue", size = 1) +
+        geom_segment(data = es2, aes(x = day_mx , xend = day_mx , y = thr, yend = mx), colour = "blue", size = 0.7, lty = 2) +
+        geom_segment(data = filter(es2, maxbloom == 1), aes(x = start_doy, xend = end_doy, y = thr, yend = thr), colour = "red", size = 1) +
+        geom_segment(data = filter(es2, maxbloom == 1), aes(x = day_mx , xend = day_mx , y = thr, yend = mx), colour = "red", size = 0.7, lty = 2) +
+    geom_text(data = es2, aes(x = start_doy,  y = mx, label = paste0("Bloom n. ", group)))+
+    
+    
+  geom_segment(aes(x = arrow_midpoint, xend =arrow_start , y = arrow_base, yend = arrow_base), 
+               arrow = arrow(type = "closed", length = unit(0.08, "inches")), color = "black") +
+  geom_segment(aes(x = arrow_midpoint , xend = arrow_end, y = arrow_base, yend = arrow_base), 
+               arrow = arrow(type = "closed", length = unit(0.08, "inches")), color = "black") +
+  geom_text(aes(x = arrow_midpoint, y = arrow_base, label = paste0("Day Diff: ", out$Day_Diff[1])),
+            vjust = -1) +
+	#ylab = 'Chl a (mg m-3)') + with a in italics
+	#labs(x = 'Day of year', y = expression(italic('Chl a (mg m-3)')))
+
+	ylab(expression(paste('Chlorophyll ', italic('a'), ' (', mg ~ m^{-3}, ')'))) 
+```
+
+
+
+# profile
+
+
+ 
+ 
+ 
+```{r}
+phenostatsXYYEAR <- function(es){
+#	browser()
+	
+	
+  es |> 
+  group_by(x, y, year) |>
+  mutate(
+    # Calcola la soglia per ogni anno
+    thr = median(CHL, na.rm = T) * 1.05,
+    above_threshold = ifelse(!is.na(CHL) & CHL > thr, 1, 0),
+    change = (lag(above_threshold, default = 0) != above_threshold) & 
+             !is.na(lag(CHL, default = CHL[1])) & 
+             !is.na(CHL),
+    group_temp = cumsum(change)
+  ) |> 
+  mutate(group = with(rle(above_threshold), rep(seq_along(lengths), lengths)),
+  			     CHLmean = mean(CHL, na.rm = TRUE),
+    Threshold = median(CHL, na.rm = TRUE),
+    Area_total = integrate_numeric(x = doy[!is.na(CHL)], 
+                                   y = CHL[!is.na(CHL) ])) %>%
+  group_by(x, y, year, group) %>%
+  filter(any(above_threshold == 1)) %>%
+  # Filtriamo solo i gruppi con una durata di almeno 14 giorni
+  filter((max(doy) - min(doy) + 1) >= 14) %>%
+  summarize(
+    start_doy = min(doy),
+    end_doy = max(doy),
+    mx = max(CHL, na.rm = TRUE),
+    day_mx = doy[which.max(CHL)],
+    amplitude = mx - thr[1],
+    BArea = integrate_numeric(x = doy, y = CHL),
+    CHLmean = mean(CHLmean, na.rm = TRUE),
+    Threshold = mean(Threshold, na.rm = TRUE),
+    Area_total = mean(Area_total, na.rm = TRUE)
+  ) |> 
+  ungroup() %>%
+  mutate(
+    group = row_number()
+  ) |>
+  group_by(x, y, year) |> 
+		arrange(-mx) |> 
+  mutate(
+    maxbloom = ifelse(mx == max(mx), 1, 0),
+
+    Bloom_Frequency = n(),
+    Max_Diff = if_else(row_number() == 1, mx - nth(mx, 2), NA_real_),
+    Day_Diff = if_else(row_number() == 1, nth(day_mx, 2) - day_mx, 290)
+  ) |> 
+	arrange(group) |> 
+	mutate(doy_start_first = start_doy[1],
+				 doy_end_first = end_doy[1]) |> 
+
+  filter(maxbloom == 1) |> 
+  dplyr::select(-maxbloom) |> 
+	rename(peak = group)
+	
+}
+```
+
+
+
+comparison with data.table
+
+<!-- ```{r} -->
+
+<!-- phenostatsXYYEARdt <- function(es) { -->
+<!--   # Convert to data.table -->
+<!--   setDT(es) -->
+
+<!--   # Calculate values by group (x, y, year) -->
+<!--   es[, `:=` (thr = median(CHL, na.rm = TRUE) * 1.05, -->
+<!--              above_threshold = fifelse(!is.na(CHL) & CHL > thr, 1L, 0L), -->
+<!--              change = fifelse((shift(above_threshold, fill = 0L) != above_threshold) & -->
+<!--                               !is.na(shift(CHL, fill = CHL[1L])) & -->
+<!--                               !is.na(CHL), 1L, 0L), -->
+<!--              group_temp = cumsum(change)), -->
+<!--       by = .(x, y, year)] -->
+
+<!--   es[, group := rleid(above_threshold)] -->
+
+<!--   # Filter and summarize by groups -->
+<!--   es[above_threshold == 1, .( -->
+<!--     start_doy = min(doy), -->
+<!--     end_doy = max(doy), -->
+<!--     mx = max(CHL, na.rm = TRUE), -->
+<!--     day_mx = doy[which.max(CHL)], -->
+<!--     amplitude = mx - thr[1], -->
+<!--     BArea = integrate_numeric(doy, CHL) -->
+<!--   ), by = .(x, y, year, group)][(end_doy - start_doy + 1) >= 14][, group := .GRP, by = .(x, y, year) -->
+<!--   ][, `:=` (maxbloom = fifelse(mx == max(mx), 1L, 0L), -->
+<!--             CHLmean = es[year == unique(year), mean(CHL, na.rm = TRUE)], -->
+<!--             Threshold = es[year == unique(year), median(CHL, na.rm = TRUE)], -->
+<!--             Area_total = integrate_numeric(es[doy[!is.na(CHL) & year == unique(year)], doy], -->
+<!--                                            es[doy[!is.na(CHL) & year == unique(year)], CHL]), -->
+<!--             Bloom_Frequency = .N, -->
+<!--             Max_Diff = fifelse(.I == 1, mx - nth(mx, 2), as.numeric(NA)), -->
+<!--             Day_Diff = fifelse(.I == 1, nth(day_mx, 2) - day_mx, 290), -->
+<!--             doy_start_first = start_doy[1], -->
+<!--             doy_end_first = end_doy[1] -->
+<!--   ), by = .(x, y, year)][order(group) -->
+<!--   ][maxbloom == 1, .SD, .SDcols = !'maxbloom'][, peak := group][] -->
+<!-- } -->
+
+<!-- ``` -->
+
+
+```{r}
+subs <- rbind(df_l |> filter(x == df_l$x[127500] & y == df_l$y[127500]),
+ df_l |> filter(x == df_l$x[117500] & y == df_l$y[117500]),
+ df_l |> filter(x == df_l$x[11500] & y == df_l$y[11500]),
+ df_l |> filter(x == df_l$x[17500] & y == df_l$y[17500]),
+ df_l |> filter(x == df_l$x[7500] & y == df_l$y[7500])
+)
+
+
+system.time(
+  test_sub <- subs |>  mutate(year = 2002) |> phenostatsXYYEAR()
+)
+test_sub
+
+
+```
+
+profile
+
+
+```{r}
+Rprof(here::here("R", "06.1_my_profile.out"))
+
+# Esegui la tua funzione con il subset di dati
+  test_sub <- subs |>  mutate(year = 2002) |> phenostatsXYYEAR()
+
+# Ferma Rprof
+Rprof(NULL)
+```
+
+
+vedo il profilo creato
+
+
+```{r}
+profile_data <- summaryRprof(here::here("R", "06.1_my_profile.out"))
+
+# Esamina i risultati
+print(profile_data)
+```
+
+
+
+provo ad implementare l'analisi con data.table
+
+
+```{r}
+
+thr <- median(subs$CHL, na.rm = TRUE) * 1.05
+
+# Assicurati che 'subs' sia un data.table
+setDT(subs)
+subs2 <- copy(subs)  # Crea una copia se non vuoi modificare 'subs' originali
+subs2[, year := 2014]  # Aggiungi la colonna 'year'
+
+# Ordinamento e creazione iniziale di 'above_threshold'
+es2 <- subs2[, .SD[order(doy)], by = .(x, y, year)]
+es2 <- es2[, thr := median(CHL, na.rm = TRUE) * 1.05, by = .(x, y, year)]
+es2[, above_threshold := fifelse(!is.na(CHL) & CHL > thr, 1L, 0L), by = .(x, y, year)]
+# 
+# es2[, change := 0L, by = .(x, y, year)]
+# es2[, change := fifelse(shift(above_threshold, type = "lag", fill = above_threshold[1L]) != above_threshold, 1L, change), by = .(x, y, year)]
+# es2[, temp_group := cumsum(change), by = .(x, y, year)]
+# 
+es2[90:92, "above_threshold"] <- 0
+
+# Calcola 'group' usando rleid e esegui le operazioni di filtraggio e riassunto
+es2[, group2 := rleid(above_threshold), by = .(x, y, year)]
+
+
+es2[, group_length := .N, by = .(x, y, year, group2)]
+
+
+check_groups <- es2[, .(above_threshold = min(above_threshold),
+												length = min(group_length)), by = .(x, y, year, group2)]
+
+
+
+# attenzione: qui unisco gruppi con buchi sotto soglia di lunghezza <= 3
+#identifico i gruppi da unire
+check_groups[, to_merge := fifelse(above_threshold == 0 & length <= 3 &
+                          shift(above_threshold, type = "lag") == 1 &
+                          shift(above_threshold, type = "lead") == 1, 1L, 0L),
+    by = .(x, y, year)]
+
+check_groups[, above_corrected := fifelse(to_merge == 1, 1L, above_threshold),]
+check_groups[, group3 := rleid(above_corrected ), by = .(x, y, year)]
+# remove columns 6:7
+check_groups[, c("above_threshold", "length", "to_merge") := NULL]
+
+
+# merge to es2 (left join)
+es2 <- merge(es2, check_groups, by = c("x", "y", "year", "group2"), allow.cartesian=TRUE)
+
+# ricalcolo il numero di giorni per ogni gruppo
+es2[, group_length := .N, by = .(x, y, year, group3)]
+
+# Filtrare i gruppi in base alle condizioni
+filtered_groups <- es2[above_corrected == 1 & group_length >= 15]
+
+
+# filtro i gruppi above_threshold, lunghi almeno 14 giorni
+es_filtered <- filtered_groups[, .(
+  start_doy = min(doy),
+  end_doy = max(doy),
+  mx = max(CHL, na.rm = TRUE),
+  day_mx = doy[which.max(CHL)],
+  
+  BArea = integrate_numeric(x = doy, y = CHL)
+), by = .(year, x, y, group3)]
+
+
+es_filtered[, peak_id := rleid(group3), by = .(x, y, year)]
+
+
+es3 <- merge(es2, es_filtered, by = c("x", "y", "year", "group3"))
+
+es3[, CHLmean := mean(CHL, na.rm = TRUE), by = .(x, y, year)]
+es3[, Barea_total := integrate_numeric(x = doy, y = CHL), by = .(x, y, year)]
+
+
+peaks <- es3[, .(
+	start_doy = min(start_doy, na.rm = TRUE),
+	end_doy = max(end_doy, na.rm = TRUE),
+	
+  mx = min(mx, na.rm = TRUE),
+  day_mx = min(day_mx, na.rm = TRUE),
+  BArea = max(BArea, na.rm = TRUE),
+  Barea_total = max(Barea_total, na.rm = TRUE),
+  CHLmean = min(CHLmean, na.rm = TRUE),
+	thr = min(thr, na.rm = TRUE)
+), by = .(x, y, year, peak_id)]
+
+
+
+setorder(peaks, x, y, year, -mx)
+
+# Calcolare le metriche per ogni gruppo
+peaks_summary <- peaks[, .(
+  start_doy = start_doy[1], 
+  end_doy = end_doy[1], 
+  mx = mx[1], 
+  day_mx = day_mx[1], 
+  BArea = BArea[1], 
+  CHLmean = CHLmean[1], 
+  thr = mean(thr),  # Assicurati che 'thr' sia presente nel tuo data.table
+  BArea_total = Barea_total[1],
+  # = mx[1] - thr[1],
+  Bloom_Frequency = .N,
+  Max_Diff = if (.N > 1) mx[1] - mx[2] else NA_real_,
+  Day_Diff = if (.N > 1) day_mx[2] - day_mx[1] else NA_real_,
+  Day_Start_First = start_doy[which.min(start_doy)],
+  Day_End_First = end_doy[which.min(start_doy)]
+), by = .(x, y, year)]
+
+# calcolo alcune metriche che mancano
+peaks_summary[, amplitude := mx - thr, ]
+
+
+es2[, days_in_group := .N, by = .(x, y, year)]
+
+# Filtrare per tenere solo gli ultimi 15 giorni di ogni gruppo
+es2_filtered <- es2[days_in_group > (days_in_group - 35)]
+
+# Calcolare la media della clorofilla per questi giorni
+es2_means <- es2_filtered[, .(CHL_mean_last_35 = mean(CHL, na.rm = TRUE)), by = .(x, y, year)]
+
+
+
+
+peaks_summary <- merge(peaks_summary, es2_means, by = c("x", "y", "year"))
+
+#Max_Diff Day_Diff set to 0 if NA
+peaks_summary[is.na(Max_Diff), Max_Diff := 0]
+peaks_summary[is.na(Day_Diff), Day_Diff := 0]
+
+
+```
+
+creo una funziona
+
+```{r}
+blooms_dt <- function(subs) {
+# Assicurati che 'subs' sia un data.table
+setDT(subs)
+subs2 <- copy(subs)  # Crea una copia se non vuoi modificare 'subs' originali
+subs2[, year := 2014]  # Aggiungi la colonna 'year'
+
+# Ordinamento e creazione iniziale di 'above_threshold'
+es2 <- subs2[, .SD[order(doy)], by = .(x, y, year)]
+es2 <- es2[, thr := median(CHL, na.rm = TRUE) * 1.05, by = .(x, y, year)]
+es2[, above_threshold := fifelse(!is.na(CHL) & CHL > thr, 1L, 0L), by = .(x, y, year)]
+# 
+
+# Calcola 'group' usando rleid e esegui le operazioni di filtraggio e riassunto
+es2[, group2 := rleid(above_threshold), by = .(x, y, year)]
+
+
+es2[, group_length := .N, by = .(x, y, year, group2)]
+
+
+check_groups <- es2[, .(above_threshold = min(above_threshold),
+												length = min(group_length)), by = .(x, y, year, group2)]
+
+
+
+# attenzione: qui unisco gruppi con buchi sotto soglia di lunghezza <= 3
+#identifico i gruppi da unire
+check_groups[, to_merge := fifelse(above_threshold == 0 & length <= 3 &
+                          shift(above_threshold, type = "lag") == 1 &
+                          shift(above_threshold, type = "lead") == 1, 1L, 0L),
+    by = .(x, y, year)]
+
+check_groups[, above_corrected := fifelse(to_merge == 1, 1L, above_threshold),]
+check_groups[, group3 := rleid(above_corrected ), by = .(x, y, year)]
+# remove columns 6:7
+check_groups[, c("above_threshold", "length", "to_merge") := NULL]
+
+
+# merge to es2 (left join)
+es2 <- merge(es2, check_groups, by = c("x", "y", "year", "group2"), allow.cartesian=TRUE)
+
+# ricalcolo il numero di giorni per ogni gruppo
+es2[, group_length := .N, by = .(x, y, year, group3)]
+
+# Filtrare i gruppi in base alle condizioni
+filtered_groups <- es2[above_corrected == 1 & group_length >= 15]
+
+
+# filtro i gruppi above_threshold, lunghi almeno 14 giorni
+es_filtered <- filtered_groups[, .(
+  start_doy = min(doy),
+  end_doy = max(doy),
+  mx = max(CHL, na.rm = TRUE),
+  day_mx = doy[which.max(CHL)],
+  
+  BArea = integrate_numeric(x = doy, y = CHL)
+), by = .(year, x, y, group3)]
+
+
+es_filtered[, peak_id := rleid(group3), by = .(x, y, year)]
+
+
+es3 <- merge(es2, es_filtered, by = c("x", "y", "year", "group3"))
+
+es3[, CHLmean := mean(CHL, na.rm = TRUE), by = .(x, y, year)]
+es3[, Barea_total := integrate_numeric(x = doy, y = CHL), by = .(x, y, year)]
+
+
+peaks <- es3[, .(
+	start_doy = min(start_doy, na.rm = TRUE),
+	end_doy = max(end_doy, na.rm = TRUE),
+	
+  mx = min(mx, na.rm = TRUE),
+  day_mx = min(day_mx, na.rm = TRUE),
+  BArea = max(BArea, na.rm = TRUE),
+  Barea_total = max(Barea_total, na.rm = TRUE),
+  CHLmean = min(CHLmean, na.rm = TRUE),
+	thr = min(thr, na.rm = TRUE)
+), by = .(x, y, year, peak_id)]
+
+
+
+setorder(peaks, x, y, year, -mx)
+
+# Calcolare le metriche per ogni gruppo
+peaks_summary <- peaks[, .(
+  start_doy = start_doy[1], 
+  end_doy = end_doy[1], 
+  mx = mx[1], 
+  day_mx = day_mx[1], 
+  BArea = BArea[1], 
+  CHLmean = CHLmean[1], 
+  thr = mean(thr),  # Assicurati che 'thr' sia presente nel tuo data.table
+  BArea_total = Barea_total[1],
+  # = mx[1] - thr[1],
+  Bloom_Frequency = .N,
+  Max_Diff = if (.N > 1) mx[1] - mx[2] else NA_real_,
+  Day_Diff = if (.N > 1) day_mx[2] - day_mx[1] else NA_real_,
+  Day_Start_First = start_doy[which.min(start_doy)],
+  Day_End_First = end_doy[which.min(start_doy)]
+), by = .(x, y, year)]
+
+# calcolo alcune metriche che mancano
+peaks_summary[, amplitude := mx - thr, ]
+
+
+es2[, days_in_group := .N, by = .(x, y, year)]
+
+# Filtrare per tenere solo gli ultimi 15 giorni di ogni gruppo
+es2_filtered <- es2[days_in_group > (days_in_group - 35)]
+
+# Calcolare la media della clorofilla per questi giorni
+es2_means <- es2_filtered[, .(CHL_mean_last_35 = mean(CHL, na.rm = TRUE)), by = .(x, y, year)]
+
+
+
+
+peaks_summary <- merge(peaks_summary, es2_means, by = c("x", "y", "year"))
+
+#Max_Diff Day_Diff set to 0 if NA
+peaks_summary[is.na(Max_Diff), Max_Diff := 0]
+peaks_summary[is.na(Day_Diff), Day_Diff := 0]
+
+    # Restituire il risultato finale
+    return(peaks_summary)
+}
+```
+
+
+
+confronto con dplyr
+
+
+```{r}
+system.time({
+  resDT <- blooms_dt(subs)
+})
+system.time({
+  resDP <-  subs |>  mutate(year = 2002) |> phenostatsXYYEAR()
+})
+
+
+resDT
+resDP
+```
+
+
+
+```{r}
+ggplot(subs, aes(doy, CHL)) +
+	geom_line() +
+	theme_few() +
+	facet_wrap(~ x + y, ncol = 1) +
+	# dont preinr facet title
+	theme(strip.text = element_blank()) +
+	geom_hline(data = resDT, aes(yintercept = thr), linetype = "dashed", color = "red") +
+	geom_point(data = resDT, aes(x = day_mx, y = mx), color = "red") +
+	geom_point(data = resDT, aes(x = day_mx + Day_Diff , y = mx - Max_Diff), color = "red") +
+	
+	geom_hline(data = resDP, aes(yintercept = Threshold), linetype = "dashed", color = "green") +
+	geom_point(data = resDP, aes(x = day_mx, y = mx), color = "green") +
+	geom_point(data = resDP, aes(x = day_mx + Day_Diff , y = mx - Max_Diff), color = "green")
+
+```
+
+

@@ -1,0 +1,94 @@
+---
+title: "Metrics on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+#library(multidplyr)
+library(data.table)
+```
+
+
+```{r}
+
+# load the rds
+
+resDT <- readRDS(here::here("R", "06.2_metrics_rel_DT.rds"))
+df <- resDT |>as.data.frame()
+
+summary(df)
+
+```
+
+
+```{r}
+cci <- stack(here::here('data/cds/daily_smoothed', 'CDS_daily_smoothed_rel.nc'))
+
+```
+
+```{r}
+names(resDT)
+class(resDT)
+str(resDT)
+```
+
+```{r}
+# fig size
+options(repr.plot.width = 10, repr.plot.height = 10)
+
+vars <- names(df)[4:ncol(df)]
+
+for(i in 1:length(vars)){
+ 
+	  var <- vars[i]
+	  
+	  r <- rasterFromXYZ(df[c('x', 'y', var)])
+	  #names(r) <- var
+	  
+	  dfr <- as.data.frame(r, xy = TRUE)
+	  names(dfr) <- c('x', 'y', "variable")
+	  
+A <-  ggplot() +
+	    geom_raster(data = dfr, aes(x = x, y = y, fill = variable)) +
+	  	# scale viridis name  in legend = var
+	    scale_fill_viridis(option = "magma") +
+	    	# change guide with title
+	    guides(fill = guide_colorbar(title = var)) +
+	    theme_bw() +
+	    theme(legend.position = 'bottom') +
+	    labs(title = var) +
+	  	xlab("") +ylab("") 
+	
+
+print(A)
+  
+print(paste(i, "/", length(vars), "-", var))
+}
+
+```
+
