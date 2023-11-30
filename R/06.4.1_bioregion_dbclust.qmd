@@ -1,0 +1,161 @@
+---
+title: "Metrics on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+library(data.table)
+library("dbscan")
+
+library(randomForest)
+library(cluster)
+
+```
+
+```{r}
+
+
+dt <- readRDS(here::here("data", "06.3_metrics_NOTrel_DT.rds"))
+
+```
+
+
+test
+
+
+
+
+provo il totale
+
+```{r}
+cal <- dt |> 
+	dplyr::select( -year) |>
+	# replace - inf with 0
+	mutate(across(everything(), ~if_else(. == -Inf, 0, .))) |>
+	# replace na with 0
+	mutate(across(everything(), ~if_else(is.na(.), 0, .)))|>
+	dplyr::select(-BArea, -BArea_total) |> 
+	# scalec
+	mutate(across(everything(), scale)) 
+
+
+
+
+```
+
+http://remote-sensing.org/unsupervised-classification-with-r/
+```{r}
+
+clus <- clara(cal,15, samples=2000,metric="euclidean",pamLike=F)
+
+dt2 <- dt
+dt2$cluster <- clus$clustering
+dd <- dt2 |> as.data.frame() |> dplyr::select(x, y, cluster)
+
+clara_raster <- rasterFromXYZ(dd)
+
+plot(clara_raster)
+# plot the raster with random colors
+plot(clara_raster, col = rainbow(15)[sample(15, 15)])
+
+```
+
+
+<!-- RF -->
+
+<!-- ```{r} -->
+<!-- library(randomForest) -->
+<!-- vx<-cal[sample(nrow(cal), 3000), c("x", "y")] -->
+<!-- rf = randomForest(vx) -->
+<!-- rf_prox <- randomForest(vx,ntree = 1000, proximity = TRUE)$proximity -->
+
+<!-- E_rf <- kmeans(rf_prox, 12, iter.max = 100, nstart = 10) -->
+<!-- rf <- randomForest(vx,as.factor(E_rf$cluster),ntree = 500) -->
+
+<!-- rf_raster<- predict(newdata = data.frame(cal),rf) -->
+
+<!-- dt2 <- dt -->
+<!-- dt2$cluster <- rf_raster -->
+
+
+<!-- dd <- dt2 |> as.data.frame() |> dplyr::select(x, y, cluster) -->
+
+<!-- rfrast <- rasterFromXYZ(dd) -->
+<!-- plot(rfrast) -->
+
+<!-- plot(dd$x, dd$y, col = dd$cluster) -->
+
+<!-- ``` -->
+
+rgeoda
+
+```{r}
+library(rgeoda)
+r <- raster(clara_raster)
+values(r) <- 1
+values(r)[which(is.na(values(clara_raster)))] <- NA
+plot(r)
+# s <- as(r, "SpatialPixelsDataFrame")
+# # as sf points
+# s <- 
+# w <- knn_weights(s, 30)
+
+
+```
+
+
+https://github.com/MatthieuStigler/Misc/blob/master/spatial/spatial_segmentation_field_GeoClust_demo.md
+
+```{r}
+dist_rast_euclid <-  function(x)  {
+  x %>% 
+    xyFromCell(cell = 1:ncell(.))  %>% 
+    dist() 
+}
+hclustgeo_df <-  function(D0, D1 = NULL, alpha, n_obs = TRUE, k = 5) {
+  res <- hclustgeo(D0, D1, alpha = alpha) %>% 
+    cutree(k=k) %>% 
+    data_frame(cluster = .)
+  if(n_obs) res <-  res %>% 
+      mutate(n_obs =   1:nrow(.)) %>% 
+      select(n_obs, everything())
+  res
+  
+}
+```
+
+
+
+distances
+
+```{r}
+dat_dist <- dist(getValues(r$layer))
+geo_dist <-  dist_rast_euclid(r)
+```
+

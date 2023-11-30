@@ -1,0 +1,155 @@
+---
+title: "Metrics on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+library(data.table)
+library("dbscan")
+
+```
+
+```{r}
+
+
+dt <- readRDS(here::here("data", "06.3_metrics_NOTrel_DT.rds"))
+
+```
+
+
+test
+
+
+
+```{r}
+data("moons")
+plot(moons, pch=20)
+
+moons
+```
+
+
+```{r}
+ cl <- hdbscan(moons, minPts = 5)
+  cl
+plot(moons, col=cl$cluster+1, pch=20)
+
+  
+```
+
+```{r}
+
+subs <- dt[1:2000, 4:ncol(dt)]
+
+subs <- scale(subs[,-c(5, 8)])
+subs <- as.matrix(subs)
+
+tt <- hdbscan(subs, minPts = 5)
+
+subs <- dt[1:2000, 1:ncol(dt)]
+
+subs$cluster <- tt$cluster + 1
+
+
+
+ggplot(subs, aes(x = x, y = y, color = factor(cluster))) +
+  geom_point() +
+ #scale_color_viridis(discrete = TRUE) +
+  theme_map() +
+  theme(legend.position = "bottom") +
+  labs(title = "HDBSCAN")
+```
+
+
+provo il totale
+
+```{r}
+cal <- dt |> 
+	dplyr::select(-x , -y, -year) |>
+	# replace na with 0
+	mutate(across(everything(), ~if_else(is.na(.), 0, .)))|>
+	dplyr::select(-BArea, -BArea_total) |> 
+	# scalec
+	mutate(across(everything(), scale)) 
+
+
+
+system.time(
+tt <- hdbscan(cal, minPts = 200)
+)
+dt2 <- dt
+
+dt2$cluster <- tt$cluster + 1
+
+
+
+saveRDS(dt2, here::here("data", "06.4.0_bioregion_dbclust.rds"))
+
+```
+
+http://remote-sensing.org/unsupervised-classification-with-r/
+```{r}
+library(cluster)
+clus <- clara(cal,8, samples=500,metric="manhattan",pamLike=T)
+
+dt2 <- dt
+dt2$cluster <- clus$clustering
+dd <- dt2 |> as.data.frame() |> dplyr::select(x, y, cluster)
+
+clara_raster <- rasterFromXYZ(dd)
+clara_raster[i] <- clus$clustering
+plot(clara_raster)
+```
+
+
+RF
+
+```{r}
+library(randomForest)
+vx<-cal[sample(nrow(cal), 500),]
+rf = randomForest(vx)
+rf_prox <- randomForest(vx,ntree = 1000, proximity = TRUE)$proximity
+
+E_rf <- kmeans(rf_prox, 12, iter.max = 100, nstart = 10)
+rf <- randomForest(vx,as.factor(E_rf$cluster),ntree = 500)
+
+rf_raster<- predict(newdata = data.frame(cal),rf)
+
+dt2 <- dt
+dt2$cluster <- rf_raster
+dd <- dt2 |> as.data.frame() |> dplyr::select(x, y, cluster)
+rfrast <- rasterFromXYZ(dd)
+plot(rfrast)
+
+plot(dd$x, dd$y, col = dd$cluster)
+
+```
+
+
+

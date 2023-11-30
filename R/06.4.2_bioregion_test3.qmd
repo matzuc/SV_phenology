@@ -1,0 +1,147 @@
+---
+title: "Metrics on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+#library(data.table)
+library("dbscan")
+
+library(randomForest)
+library(cluster)
+library(ClustGeo)
+```
+
+```{r}
+
+
+dt <- readRDS(here::here("data", "06.3_metrics_NOTrel_DT.rds"))
+
+```
+
+```{r}
+
+dt2 <- dt |> 
+	  dplyr::select( -year) |>
+  # replace - inf with 0
+  mutate(across(everything(), ~if_else(. == -Inf, 0, .))) |>
+  # replace na with 0
+  mutate(across(everything(), ~if_else(is.na(.), 0, .))) |> 
+  # scalec
+  mutate(across(everything(), scale)) 
+
+
+  cor(dt2, use = "pairwise.complete.obs")
+
+```
+
+```{r}
+rfull <- rasterFromXYZ(dt2)
+rfull
+
+
+# aggregate factor 8
+r8 <- aggregate(rfull, fact = 2, fun = mean)
+mask <- r8[[1]]
+values(mask)[!is.na(values(mask))] <- 1
+
+values(r8)[which(is.na(values(r8)))] <- 0
+```
+
+
+
+https://github.com/MatthieuStigler/Misc/blob/master/spatial/spatial_segmentation_field_GeoClust_demo.md
+
+```{r}
+dist_rast_euclid <-  function(x)  {
+  x %>% 
+    xyFromCell(cell = 1:ncell(.))  %>% 
+    dist() 
+}
+hclustgeo_df <-  function(D0, D1 = NULL, alpha, n_obs = TRUE, k = 5) {
+  res <- hclustgeo(D0, D1, alpha = alpha) %>% 
+    cutree(k=k) %>% 
+    tibble(cluster = .)
+  if(n_obs) res <-  res %>% 
+      mutate(n_obs =   1:nrow(.)) %>% 
+      dplyr::select(n_obs, everything())
+  res
+  
+}
+```
+
+
+
+distances
+
+```{r}
+dat_dist <- dist(getValues(r8))
+geo_dist <-  dist_rast_euclid(r8)
+```
+
+```{r}
+ras_dat <- as.data.frame(r8, xy = TRUE) %>%  as_tibble %>% 
+  mutate(n_cell = 1:ncell(r8)) %>% 
+  dplyr::select(n_cell, everything())# %>% 
+  #rename(value = layer)
+ras_dat
+```
+
+
+```{r}
+res_alphas <- data_frame(alpha = seq(0, 1, by = 0.1)) %>% 
+  mutate(alpha_name = paste("alpha", alpha, sep="_"),
+         data = map(alpha, ~ hclustgeo_df(dat_dist, geo_dist, alpha = ., k=15)))
+
+res_alphas_l <-  res_alphas %>% 
+  unnest(data) %>% 
+  left_join(ras_dat, by = c("n_obs" = "n_cell")) %>% 
+  mutate_at(c("alpha", "cluster"), as.factor) 
+
+```
+
+
+```{r}
+
+res_alphas_l_dat <-  res_alphas_l %>% 
+  filter(alpha %in% c(0, 0.1, 0.5, 0.8, 0.9, 1)) 
+
+
+pl_clus_geoSpace <- res_alphas_l_dat %>% 
+  ggplot(aes(x = x, y= y, fill = factor(cluster))) +
+  geom_tile() +
+  facet_grid(alpha ~ .) +
+  theme(legend.position = "none") +
+  ggtitle("Cluster, in geo-space") +
+  theme_few()
+
+pl_clus_geoSpace
+```
+
+
