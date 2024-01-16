@@ -1,0 +1,321 @@
+---
+title: "cluster on CLIMATOLOGY on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+#library(data.table)
+library("dbscan")
+
+library(factoextra)
+library(cluster)
+library(ClustGeo)
+```
+
+
+definisco il fattore di riduzione spaziale
+il fattore di ricampionamento per lo smooth
+il numero di campioni di bootstrap
+
+```{r}
+myfactor <- 4
+myfact_smooth <- 4
+nboot <- 100
+
+```
+
+
+
+```{r}
+
+
+rfull <- stack(here::here("data", "CDS/daily_smoothed/daily_smoothed.nc"))
+rfull
+
+rdf <- as.data.frame(rfull, xy = TRUE) %>%  as_tibble %>%
+	# replace NA with 0 fol all variables
+	mutate_at(vars(-x, -y), ~ replace_na(., 0))
+
+rfull <- rasterFromXYZ(rdf)
+
+
+# aggregate factor 8
+r8 <- aggregate(rfull, fact = myfactor, fun = mean)
+
+plot(r8[[40:50]])
+```
+
+
+
+
+```{r}
+
+dist_rast_euclid <-  function(x)  {
+  x %>% 
+    xyFromCell(cell = 1:ncell(.))  %>% 
+    dist() 
+}
+
+
+
+hclustgeo_df <-  function(D0, D1 = NULL, alpha, n_obs = TRUE, k = K) {
+  res <- hclustgeo(D0, D1, alpha = alpha) %>% 
+    cutree(k=k) %>% 
+    tibble(cluster = .)
+  if(n_obs) res <-  res %>% 
+      mutate(n_obs =   1:nrow(.)) %>% 
+      dplyr::select(n_obs, everything())
+  res
+  
+}
+
+```
+
+
+distances
+
+```{r}
+dat_dist <- dist(getValues(r8))
+geo_dist <-  dist_rast_euclid(r8)
+```
+
+
+valuto solo le variabili fenologiche 
+(https://hal.science/hal-01664018/document)
+```{r}
+myclust <- hclustgeo(dat_dist)
+
+
+plot(myclust, hang=-1,label=FALSE, xlab="",sub="", main="")
+
+
+length(which(myclust$height>0.1))
+
+       height <- data.frame(h = myclust$height, id = 1:length(myclust$height))
+       
+       hplot <- height |> 
+         filter(h > 0.1)
+
+barplot(hplot$h,
+  names.arg = nrow(hplot):1 # show the number of cluster below each bars
+)
+```
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+hclusCut <- function(x, k, d.meth = "euclidean", ...)    list(cluster = cutree(hclust(dist(x, method=d.meth), ...), k=k))
+
+
+hc_geo <- function(x, k, d.meth = "euclidean", ...)    list(cluster = cutree(hclustgeo(dist(x)), k=k))
+
+
+#gskmn <- clusGap(getValues(r8), FUN = hclusCut, K.max = 20, B = 5, method = "Tibs2001SEmax")
+
+gskmn <- clusGap(getValues(r8), FUN = hc_geo,  K.max = 28, B = nboot, method = "Tibs2001SEmax")
+
+plot(gskmn)
+
+fviz_gap_stat(gskmn, maxSE = list(method = "Tibs2001SEmax"))
+gskmn
+ print(gskmn, method = "Tibs2001SEmax")
+ print(gskmn, method = "firstSEmax")
+
+str(summary(gskmn))
+
+
+
+
+# Tibshirani
+gap_values <- gskmn$Tab[, "gap"]
+se_values <- gskmn$Tab[, "SE.sim"]
+optimal_k <- 1
+for (k in 1:(length(gap_values) - 1)) {
+  if (gap_values[k] >= gap_values[k + 1] - se_values[k + 1]) {
+    optimal_k <- k
+    break
+  }
+}
+
+# Stampare il numero ottimale di cluster
+print(optimal_k)
+Tibs <- optimal_k
+
+
+# Trovare il primo massimo locale
+max_gap <- max(gap_values)
+first_max_loc <- which.max(gap_values)
+SE.factor <- 1
+
+# Trova il primo massimo locale del Gap Statistic
+max_local_gap <- which(diff(sign(diff(gap_values))) == -2) + 1
+if (length(max_local_gap) == 0) {
+  max_local_gap <- 1
+}
+
+# Applicare il criterio "firstSEmax"
+optimal_k <- 1
+for (k in max_local_gap:length(gap_values)) {
+  if (gap_values[k] >= gap_values[max_local_gap] - SE.factor * se_values[max_local_gap]) {
+    optimal_k <- k
+    break
+  }
+}
+
+# Stampare il numero ottimale di cluster
+print(optimal_k)
+
+
+print(paste(
+  "Tipshirani: optimal number of clusters is:",
+  Tibs,
+  "; the FirstSEmax criterion suggests:",
+  optimal_k
+  
+))
+
+selK <- max(Tibs)
+selK
+```
+
+
+
+```{r}
+ras_dat <- as.data.frame(r8, xy = TRUE) %>%  as_tibble %>% 
+  mutate(n_cell = 1:ncell(r8)) %>% 
+  dplyr::select(n_cell, everything())# %>% 
+  #rename(value = layer)
+
+```
+
+
+
+```{r}
+
+alphaS <- c(
+  c(0, 0.1, 0.2, 0.5, 0.6, 0.7, 0.8,  1),
+  seq(0.3, 0.4, by = 0.025)
+)
+
+alphaS <- alphaS |> sort()
+
+
+
+K <- selK
+
+
+cr <- choicealpha(dat_dist, geo_dist, , K = K, range.alpha = alphaS, graph=TRUE)
+plot(cr, norm = T)
+
+alphaSEL <-  alphaS[which.min(abs(cr$Qnorm[, 1] - cr$Qnorm[,2]))] 
+alphaSEL
+
+res_alphas <- data_frame(alpha = alphaS) %>% 
+  mutate(alpha_name = paste("alpha", alpha, sep="_"),
+         data = map(alpha, ~ hclustgeo_df(dat_dist, geo_dist,alpha = ., K)))
+
+
+
+res_alphas_l <-  res_alphas %>% 
+  unnest(data) %>% 
+  left_join(ras_dat, by = c("n_obs" = "n_cell")) %>% 
+  mutate_at(c("alpha", "cluster"), as.factor) 
+
+```
+
+
+```{r}
+
+res_alphas_l_dat <-  res_alphas_l %>% 
+  filter(alpha %in% alphaS) 
+
+
+pl_clus_geoSpace <- res_alphas_l_dat %>% 
+  ggplot(aes(x = x, y= y, fill = factor(cluster))) +
+  geom_tile() + 
+  facet_grid(alpha ~ .) +
+  theme(legend.position = "none") +
+  ggtitle("Cluster, in geo-space") +
+  theme_few()
+
+pl_clus_geoSpace
+
+saveRDS(res_alphas_l_dat, here::here("out", paste0("06.4.4_res_alphas_l_dat_f", myfactor, "_k", K, ".rds")))
+
+```
+
+
+
+# raster
+
+```{r}
+selex <- res_alphas_l_dat |> 
+  filter(alpha == alphaSEL[1] )
+
+clustR <- rasterFromXYZ(selex[c("x", "y", "cluster")])
+plot(clustR)
+writeRaster(clustR, here::here("out", paste0("06.4.5_bioregion_COARSE", myfactor, "_k", K,  "nBoot_", nboot,  ".CLIMAT.tif")), overwrite = TRUE)
+
+
+
+res_high <- res(clustR) / myfact_smooth  # Ad esempio, dimezza la risoluzione per aumentare i dettagli
+clustR_high_res <- resample(clustR, raster(extent(clustR), resolution=res_high), method = "ngb")
+clustR_smooth <- focal(clustR_high_res, w = matrix(1, 15, 15), fun = median)
+writeRaster(clustR_smooth, here::here("out", paste0("06.4.5_bioregion_smooth_f", myfactor, "_k", K, "res_", myfact_smooth, "nBoot_", nboot,  ".CLIMAT.tif")), overwrite = TRUE)
+
+
+plot(clustR)
+plot(clustR_smooth)
+
+
+pol <- rasterToPolygons(clustR_smooth) |> st_as_sf() |> 
+  group_by(layer) |>
+  summarise(geometry = st_union(geometry)) 
+
+plot(pol)
+st_write(pol, here::here("out",  paste0("06.4.5__bioregion_smooth_f",  myfactor, "_k", K, "res_", myfact_smooth, "nBoot_", nboot, ".CLIMAT.shp")), overwrite = TRUE, append=FALSE)
+
+
+
+
+
+```
+
+
+
+
+

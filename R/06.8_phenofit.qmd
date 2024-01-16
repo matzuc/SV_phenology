@@ -1,0 +1,113 @@
+---
+title: "cluster on CLIMATOLOGY on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+library(viridis)
+library(phenofit)
+
+```
+
+
+
+
+```{r}
+dat <- read.csv(here::here("out", "06.7_time_series_raw_7CL.csv"))
+
+```
+
+scelgo uno dei cluster
+
+```{r}
+d2 <- dat |> 
+	filter(cluster == 1) |> 
+	mutate(ddat = as.Date(date)) 
+```
+
+```{r}
+ggplot(d2, aes(x = doy, y = ave)) +
+	geom_line() +
+	theme_bw() +
+	theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+	labs(x = "date", y = "EVI") +
+	facet_wrap(~year)
+
+```
+
+```{r}
+```
+
+
+
+```{r}
+d <- MOD13A1$dt %>% subset(site == "CA-NS6" & date >= "2010-01-01" & date <= "2016-12-31") %>%
+    .[, .(date, y = EVI/1e4, DayOfYear, QC = SummaryQA)]
+d %<>% mutate(t = getRealDate(date, DayOfYear)) %>%
+    cbind(d[, as.list(qc_summary(QC, wmin = 0.2, wmid = 0.5, wmax = 0.8))]) %>%
+    .[, .(date, t, y, QC_flag, w)]
+head(d)
+
+```
+
+```{r}
+
+lambda         <- 8
+nptperyear     <- 365/3
+minExtendMonth <- 0.5
+maxExtendMonth <- 1
+minPercValid   <- 0
+wFUN           <- wTSM # wBisquare
+wmin           <- 0.2
+methods_fine <- c("AG", "Zhang", "Beck", "Elmore", "Gu")
+```
+
+```{r}
+d2 <- dat |> 
+	filter(cluster == 1) |> 
+	mutate(ddat = as.Date(date)) 
+d2$w <- 0.2
+
+
+INPUT <- check_input(d2$date, d2$ddat, d2$w,
+    #QC_flag = d$QC_flag,
+    nptperyear = nptperyear,
+    maxgap = nptperyear / 4,
+    wmin = 0.2
+)
+```
+
+```{r}
+brks <- season_mov(INPUT,
+    list(FUN = "smooth_wWHIT", wFUN = wFUN,
+        maxExtendMonth = 3,
+        wmin = wmin, r_min = 0.1
+    ))
+plot_season(INPUT, brks)
+```
+
+
+
+
+

@@ -1,0 +1,875 @@
+---
+title: "cluster on CLIMATOLOGY on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+
+library(ggOceanMaps)
+library(grafify)
+
+
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+library(data.table)
+library(corrplot)
+```
+
+
+Uso i cluster identificati in 
+
+[python script](D:/Dropbox/R_projects/test_cluster/R/z_cluster_climatology.ipynb
+
+
+
+# grafico Elbow
+
+```{r}
+elbow <- read.csv(here::here("data/wcss_7_elbow_metrics_cl_CLEAN.csv"))
+
+#standardize wcss bettween 0 e 30
+elbow$wcssST <- (elbow$wcss - min(elbow$wcss)) /( max(elbow$wcss) - min(elbow$wcss)) * 31
+
+labs <- data.frame(ST = c(0, 10, 20, 30))
+labs$OR <- labs$ST * (max(elbow$wcss) - min(elbow$wcss)) / 31 + min(elbow$wcss)
+	
+
+first_point <- elbow[1, ]
+last_point <- tail(elbow, 1)
+
+# Calcola la pendenza e l'intercetta della linea
+m <- (last_point$wcssST - first_point$wcssST) / (last_point$k - first_point$k)
+b <- first_point$wcssST - m * first_point$k
+
+m1 <- -1/m
+
+angle = atan(abs((m-m1)/(1+m1*m))) * 180 / pi
+
+angle
+
+
+elbow$xend <- NA
+elbow$yend <- NA
+
+
+b0 <- elbow$wcssST[2] - m1 * elbow$k[2]
+
+
+
+for(i in 2:(nrow(elbow) - 1)) {
+	b_prime = elbow$wcssST[i] - m1 * elbow$k[i]
+  
+	elbow$xend[i] <- (b_prime - b) / (m - m1)
+	elbow$yend[i] <- m1 * elbow$xend[i] + b_prime
+
+}
+
+
+
+
+ggplot(elbow, aes(x=k, y=wcssST)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Elbow Method",
+       subtitle = "WCSS vs. Clusters",
+       x = "Number of Clusters",
+       y = "Within Cluster Sum of Squares") +
+  theme_bw() +
+geom_line(data = elbow[c(1, 30), ], linetype = "dashed") +
+	geom_segment(aes(xend = xend, yend = yend), linetype = "dotted", alpha = 0.6) +
+	geom_segment(data = filter(elbow, k == 7), aes(xend = xend, yend = yend), size = 1.1) +
+	coord_equal() +
+	scale_y_continuous(breaks = labs$ST, labels = scales::scientific(labs$OR) )
+
+ggsave(here::here('out', '06.7_elbowplot_7cl.png'), width = 8, height = 6, dpi = 300)
+
+
+```
+
+
+# Cluster
+
+carico il netCDF salvato da python
+
+```{r}
+r <- raster(here::here("data/cluster_7_elbow_metrics_cl_CLEAN.nc"))
+writeRaster(r, here::here("D:/Dropbox/R_projects/test_cluster/data/06.7_xr_data_7_elbow.tif"), overwrite = TRUE)
+```
+
+```{r}
+# convert as polygon
+sv_deg <- rasterToPolygons(r,  dissolve = TRUE) |> st_as_sf() |> 
+	rename(layer = cluster  ) |>
+  group_by(layer) |>
+  summarise(geometry = st_union(geometry)) 
+
+plot(sv_deg)
+# set crs to 4326
+st_crs(sv_deg) <- 4326
+st_write(sv_deg, here::here("out",  paste0("06.7_xr_data_7_elbow.shp")), overwrite = TRUE, append=FALSE)
+
+
+sv <- st_read(
+	"D:/Dropbox/R_projects/svalbaRd/data/Svalbard_UTM.shp"
+)
+
+sv <- st_transform(sv, crs = 4326)
+plot(sv)
+
+
+k <- st_difference(sv_deg, st_union(sv)) 
+plot(k)
+st_write(k, here::here("out",  paste0("06.7_xr_data_7_elbow_EDITED.shp")), overwrite = TRUE, append=FALSE)
+
+
+```
+
+
+```{r}
+
+basemap(limits = c(-7, 52, 68, 85), rotate = T,
+				bathymetry = F) +
+theme(axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.ticks.y = element_blank()
+      ) +
+	geom_sf(data = k, aes(fill = factor(layer)), color = NA, alpha = 0.65) +
+	# legend on the bottom
+	theme(legend.position = "bottom") +
+	#modify guide changing the name of the fill
+labs(fill = "Cluster") +
+	#scale_fill_grafify()+
+	 grafify::scale_fill_grafify(palette = "kelly")
+
+
+ggsave(here::here("out",  paste0("06.7_xr_data_7_elbow.png")), width = 10, height = 10, dpi = 300, bg = "white")
+
+```
+
+
+
+
+```{r}
+
+basemap(limits = c(-7, 52, 68, 85), rotate = T,
+				bathymetry = F) +
+theme(axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.ticks.y = element_blank()
+      ) +
+	geom_sf(data = k, aes(fill = factor(layer)), color = NA, alpha = 0.65) +
+	# legend on the bottom
+	theme(legend.position = "bottom") +
+	#modify guide changing the name of the fill
+labs(fill = "Cluster") +
+	#scale_fill_grafify()+
+	 grafify::scale_fill_grafify(palette = "kelly")
+
+
+ggsave(here::here("out",  paste0("06.7_xr_data_7_elbow.png")), width = 10, height = 10, dpi = 300, bg = "white")
+
+```
+
+
+```{r}
+A <- basemap(limits = c(-7, 52, 68, 85), rotate = T,
+				bathymetry = F) +
+theme(axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks.x = element_blank(),
+      axis.ticks.y = element_blank()
+      ) +
+	geom_sf(data = k, aes(fill = factor(layer)), color = NA, alpha = 0.65) +
+	# legend on the bottom
+	theme(legend.position = "bottom") +
+	#modify guide changing the name of the fill
+labs(fill = "Cluster") +
+	#scale_fill_grafify()+
+	 grafify::scale_fill_grafify(palette = "kelly")
+
+
+cur <- PlotSvalbard::barents_currents |> sf::st_as_sf()
+
+
+st_write(cur, here::here("out",  paste0("06.7_xr_data_7_elbow_cur.shp")), overwrite = TRUE, append=FALSE)
+
+
+
+st_crs(cur) <- 32633
+
+cur_deg <- st_transform(cur, crs = 4326)
+
+A +
+	geom_sf(data = cur_deg,size = 1.5)
+
+
+# Estrai le coordinate lon e lat dalla colonna geometry
+cur_deg <- cur_deg %>%
+  mutate(lon = as.numeric(st_coordinates(geometry)[, 1]),
+         lat = as.numeric(st_coordinates(geometry)[, 2]))
+
+
+curdf <- cur_deg |> 
+	as.data.frame() |> 
+	dplyr::select(group, size, type, lon, lat) 
+
+
+# Ora crea le linee
+lines <- curdf %>%
+  group_by(group) %>%
+  arrange(group) %>%
+  do({
+    linea <- st_linestring(as.matrix(.[, c("lon", "lat")]))
+    st_sf(group = .$group[1], 
+    			size = .$size[1],
+    			type = .$type[1],
+    			geometry = st_sfc(linea, crs = 4326))
+  })
+linez <- st_as_sf(lines)
+
+A +
+	geom_sf(data = linez,
+					size = 1.5, aes(colour = type), show.legend = F, arrow =  arrow(angle = 25, ends = "last",  length = unit(0.1, "cm"))) +
+	scale_colour_manual(values = c("blue", "red"))
+ggsave(here::here("out",  paste0("06.7_xr_data_7_elbow_currents.png")), width = 10, height = 10, dpi = 300, bg = "white")
+
+
+
+
+write_sf(linez, here::here("data",  paste0("currents.shp")), overwrite = TRUE, append=FALSE)
+
+```
+
+
+
+
+
+# serie temporale
+
+```{r}
+rfull <- stack(here::here("data", "CDS/daily_smoothed/daily_smoothed.nc"))
+rfull
+
+rex <- extend(r, rfull)
+
+
+mask <- st_read("D:/Dropbox/R_projects/svalbaRd/data/Svalbard_UTM.shp")
+plot(mask)
+mask <- st_transform(mask, crs = 4326)
+rmask <- rasterize(mask, rex)
+
+
+rexint <- rex
+rexint[which(is.na(values(rexint)))] <- -1
+rexint[which(!is.na(values(rmask)))] <- NA
+
+
+rtot <- stack(rexint, rfull)
+names(rtot)[1] <- "cluster"
+rdf <- as.data.frame(rtot, xy = TRUE)
+
+	
+rdf_long <- pivot_longer(rdf, -c(x, y, cluster), names_to = "valabr", values_to = "value")
+rdf_long$doy <- as.numeric(gsub("X", "", rdf_long$valabr))
+
+
+
+ave <- rdf_long |> 
+	filter(!is.na(value)) |> 
+	rename(K = cluster) |>
+	#mutate(K = factor(K)) |> 
+	group_by(K, doy) |>
+	summarise(ave = mean(value, na.rm = T), n = n(), se = plotrix::std.error(value), sd = sd(value))
+
+
+write.csv(ave, here::here("out", paste0("06.7_bioregion_climatology_elbow7_CL.csv")), row.names = FALSE)
+
+```
+
+```{r}
+
+aveth <- ave |> filter(!is.na(K)) |> 
+	group_by(K) |> 
+	summarise(th = median(ave, na.rm = T)* 1.05)
+
+
+# ave <- ave |> mutate(
+# 	K = factor(K, levels = c(-1, 0:6), labels = c("NA", "0", "1", "2", "3", "4", "5", "6"))
+# )
+
+ggplot(ave|>filter(!is.na(K)), aes(doy, ave)) +
+	geom_line() +
+	facet_wrap(~K, ncol = 4) +
+	theme_few() +
+	geom_ribbon(aes(ymin = ave - sd, ymax = ave + sd, fill = factor(K)), alpha = 0.65) +
+	scale_fill_grafify(palette = "kelly") +
+	# remove legend
+	theme(legend.position = "none") +
+	xlab("Day of the year") +
+	ylab("Chlorophyll-a concentration (mg/m3)") +
+	geom_hline(data = aveth, aes(yintercept = th, colour = factor(K)), linetype = "dashed") +
+	scale_colour_grafify(palette = "kelly") 
+
+ggsave(here::here("out", paste0("06.7_bioregion_climatology_elbow7_CL.png")), width = 12, height = 8, dpi = 300, bg = "white")
+
+
+
+```
+
+
+# metriche
+
+```{r}
+cppFunction('
+double integrate_numeric(NumericVector x, NumericVector y) {
+  int n = y.size();
+
+  if (n % 2 == 0) {
+    // Trapezoidal rule for even number of points
+    double sum = 0.0;
+    for(int i = 0; i < n - 1; i++) {
+      double h = x[i + 1] - x[i];
+      sum += h * (y[i] + y[i + 1]) / 2;
+    }
+    return sum;
+  } else {
+    // Simpson s rule for odd number of points
+    double h = (max(x) - min(x)) / (n - 1);
+    double sum1 = 0.0;
+    double sum2 = 0.0;
+    for(int i = 1; i < n - 1; i += 2) {
+      sum1 += y[i];
+    }
+    for(int i = 2; i < n - 2; i += 2) {
+      sum2 += y[i];
+    }
+    return h / 3 * (y[0] + y[n - 1] + 4 * sum1 + 2 * sum2);
+  }
+}
+')
+```
+
+
+
+
+# process with data.table
+
+creo una funziona
+
+```{r}
+blooms_dt <- function(subs) {
+# Assicurati che 'subs' sia un data.table
+setDT(subs)
+subs2 <- copy(subs)  # Crea una copia se non vuoi modificare 'subs' originali
+#subs2[, year := 2014]  # Aggiungi la colonna 'year'
+
+# Ordinamento e creazione iniziale di 'above_threshold'
+es2 <- subs2[, .SD[order(doy)], by = .(x, y, year)]
+es2 <- es2[, thr := median(CHL, na.rm = TRUE) * 1.05, by = .(x, y, year)]
+es2[, above_threshold := fifelse(!is.na(CHL) & CHL > thr, 1L, 0L), by = .(x, y, year)]
+# 
+
+# Calcola 'group' usando rleid e esegui le operazioni di filtraggio e riassunto
+es2[, group2 := rleid(above_threshold), by = .(x, y, year)]
+
+
+es2[, group_length := .N, by = .(x, y, year, group2)]
+
+
+check_groups <- es2[, .(above_threshold = min(above_threshold),
+												length = min(group_length)), by = .(x, y, year, group2)]
+
+
+
+# attenzione: qui unisco gruppi con buchi sotto soglia di lunghezza <= 3
+#identifico i gruppi da unire
+check_groups[, to_merge := fifelse(above_threshold == 0 & length <= 3 &
+                          shift(above_threshold, type = "lag") == 1 &
+                          shift(above_threshold, type = "lead") == 1, 1L, 0L),
+    by = .(x, y, year)]
+
+check_groups[, above_corrected := fifelse(to_merge == 1, 1L, above_threshold),]
+check_groups[, group3 := rleid(above_corrected ), by = .(x, y, year)]
+# remove columns 6:7
+check_groups[, c("above_threshold", "length", "to_merge") := NULL]
+
+
+# merge to es2 (left join)
+es2 <- merge(es2, check_groups, by = c("x", "y", "year", "group2"), allow.cartesian=TRUE)
+
+# ricalcolo il numero di giorni per ogni gruppo
+es2[, group_length := .N, by = .(x, y, year, group3)]
+
+# Filtrare i gruppi in base alle condizioni
+filtered_groups <- es2[above_corrected == 1 & group_length >= 15]
+
+
+# filtro i gruppi above_threshold, lunghi almeno 14 giorni
+es_filtered <- filtered_groups[, .(
+  start_doy = min(doy),
+  end_doy = max(doy),
+  mx = max(CHL, na.rm = TRUE),
+  day_mx = doy[which.max(CHL)],
+  
+  BArea = integrate_numeric(x = doy, y = CHL)
+), by = .(year, x, y, group3)]
+
+
+es_filtered[, peak_id := rleid(group3), by = .(x, y, year)]
+
+
+es3 <- merge(es2, es_filtered, by = c("x", "y", "year", "group3"))
+
+es3[, CHLmean := mean(CHL, na.rm = TRUE), by = .(x, y, year)]
+es3[, Barea_total := integrate_numeric(x = doy, y = CHL), by = .(x, y, year)]
+
+
+peaks <- es3[, .(
+	start_doy = min(start_doy, na.rm = TRUE),
+	end_doy = max(end_doy, na.rm = TRUE),
+	
+  mx = min(mx, na.rm = TRUE),
+  day_mx = min(day_mx, na.rm = TRUE),
+  BArea = max(BArea, na.rm = TRUE),
+  Barea_total = max(Barea_total, na.rm = TRUE),
+  CHLmean = min(CHLmean, na.rm = TRUE),
+	thr = min(thr, na.rm = TRUE)
+), by = .(x, y, year, peak_id)]
+
+
+
+setorder(peaks, x, y, year, -mx)
+
+# Calcolare le metriche per ogni gruppo
+peaks_summary <- peaks[, .(
+  start_doy = start_doy[1], 
+  end_doy = end_doy[1], 
+  mx = mx[1], 
+  day_mx = day_mx[1], 
+  BArea = BArea[1], 
+  CHLmean = CHLmean[1], 
+  thr = mean(thr),
+  BArea_total = Barea_total[1],
+  Bloom_Frequency = .N,
+  Max_Diff = as.double(if (.N > 1) mx[1] - mx[2] else NA_real_),
+  Day_Diff = as.double(if (.N > 1) day_mx[2] - day_mx[1] else NA_real_),
+  Day_Start_First = start_doy[which.min(start_doy)],
+  Day_End_First = end_doy[which.min(start_doy)]
+), by = .(x, y, year)]
+
+
+
+
+# calcolo alcune metriche che mancano
+peaks_summary[, amplitude := mx - thr, ]
+
+
+es2[, days_in_group := .N, by = .(x, y, year)]
+
+# Filtrare per tenere solo gli ultimi 15 giorni di ogni gruppo
+es2_filtered <- es2[days_in_group > (days_in_group - 35)]
+
+# Calcolare la media della clorofilla per questi giorni
+es2_means <- es2_filtered[, .(CHL_mean_last_35 = mean(CHL, na.rm = TRUE)), by = .(x, y, year)]
+
+
+
+
+peaks_summary <- merge(peaks_summary, es2_means, by = c("x", "y", "year"))
+
+#Max_Diff Day_Diff set to 0 if NA
+peaks_summary[is.na(Max_Diff), Max_Diff := 0]
+peaks_summary[is.na(Day_Diff), Day_Diff := 0]
+
+    # Restituire il risultato finale
+    return(peaks_summary)
+}
+```
+
+
+
+confronto con dplyr
+
+
+```{r}
+
+df_l <- ave |> 
+	rename(CHL = ave) |> 
+	mutate(x = K, y = K, year = 2014)
+
+system.time({
+  resDT <- blooms_dt(df_l)
+})
+
+
+saveRDS(resDT, here::here("data", "06.7_metrics_NOTrel_DT_elbow7CL.rds"))
+
+```
+
+
+
+
+```{r}
+
+aveth <- ave |> filter(!is.na(K)) |> 
+	group_by(K) |> 
+	summarise(th = median(ave, na.rm = T)* 1.05)
+
+resDT <- resDT |> 
+	mutate(K = x)
+
+
+sec <- resDT |> 
+	filter(Bloom_Frequency == 2) |>
+	mutate(doy2 = day_mx + Day_Diff,
+				 mx = mx - Max_Diff)
+
+ave <- left_join(ave, aveth)
+
+ggplot(ave|>filter(!is.na(K)), aes(doy, ave)) +
+	geom_line()  +
+	facet_wrap(~K, ncol = 4) +
+	theme_few() +
+	geom_ribbon(aes(ymin = ave - sd, ymax = ave + sd, fill = factor(K)), alpha = 0.65) +
+	scale_fill_grafify(palette = "kelly") +
+	# remove legend
+	theme(legend.position = "none") +
+	xlab("Day of the year") +
+	ylab("Chlorophyll-a concentration (mg/m3)") +
+	geom_hline(data = aveth, aes(yintercept = th, colour = factor(K)), linetype = "dotted") +
+	scale_colour_grafify(palette = "kelly") +
+	geom_point(data = resDT|> filter(!is.na(K)), aes(x = day_mx, y = mx), colour = "red", size = 2) +
+	geom_vline(data = resDT|> filter(!is.na(K)), aes(xintercept = day_mx),  size = 0.3, alpha = 0.3) +
+	geom_point(data = sec, aes(x = doy2, y = mx), col = "green") +
+	geom_ribbon(aes(ymin = ifelse(ave > th, th, NA), ymax = ave), fill = "grey30", alpha = 0.5) +
+	geom_segment(data = resDT |> filter(!is.na(K)), aes(x = start_doy, xend = end_doy, y = thr, yend = thr), colour = "red", size = 1) 
+
+	
+
+
+
+ggsave(here::here("out", paste0("06.6_bioregion_climatology_elbow11_stats.png")), width = 12, height = 8, dpi = 300, bg = "white")
+
+
+```
+
+# time series
+
+
+```{r}
+#names(r)  <- "K"
+out <- data.frame(year = NA, date = NA, doy = NA, cluster = NA, ave = NA, se = NA, sd = NA)
+for(year in 1998:2022){
+	
+	# list files
+	files <- list.files(here::here("data", "CDS", "daily_smoothed", year), full.names = T)
+	
+	s <- stack()
+	for(i in 1:length(files)){
+		
+		# load chla
+		mo <- stack(files[i], varname = "chlor_a")
+		# attacco ai cluster
+		mor <- stack(rexint, mo)
+		
+		# converto data frame
+		rdf <- as.data.frame(mor, xy = TRUE)
+		
+		# trasformo in long
+		rdf_long <- pivot_longer(rdf, -c(x, y, cluster), names_to = "valabr", values_to = "value") |> filter(!is.na(cluster))
+		rdf_long$date <- as_date(gsub("X", "", rdf_long$valabr))
+		
+		# calcolo la media
+		ave <- rdf_long |> 
+			mutate(year = year(date), doy = yday(date)) |>
+			group_by(year, date, doy, cluster) |> 
+			summarise(ave = mean(value, na.rm = T), se = plotrix::std.error(value), sd = sd(value))
+		
+		out <- rbind(out, ave)
+			print(paste(year, i, "/", length(files)))
+
+	}
+
+	
+}
+
+```
+
+
+```{r}
+out2 <- out |> filter(!is.na(cluster)) |> 
+	mutate(date = as_date(date))
+
+write.csv(out2, here::here("out", "06.7_time_series_raw_7CL.csv"), row.names = F)
+
+```
+
+
+
+```{r}
+ggplot(out2 , aes(date, ave))+
+#	geom_point() +
+	geom_line() +
+	facet_wrap(~cluster, ncol = 1)
+```
+
+
+
+calcolo metriche
+
+
+
+
+```{r}
+out3 <- out2 |>  
+	rename(CHL = ave) |> 
+	mutate(x = cluster, y = cluster)
+
+
+system.time({
+  resDT <- blooms_dt(out3)
+})
+
+
+metr <- resDT[0, ]
+
+# for(y in 1999:2022){
+# 	
+# 	dat <- out3 |> dplyr::filter(year == 2005)
+# 	# filter out3 by year with DT
+# 	dat 
+# 	res <- blooms_dt(dat)
+# 	
+# 	metr <- rbind(metr, res)
+# 	
+# 	
+# }
+# # non funziona bene, provo con un ciclo annuale
+
+
+```
+
+
+
+```{r}
+ggplot(resDT, aes(x = year, y = day_mx              )) +
+	geom_point() +
+
+	facet_wrap(~x, ncol = 1, scale = "free") +
+	geom_smooth(method = "lm", se = F) 
+
+```
+
+
+```{r}
+
+resPL <- resDT |> mutate(cluster = x)
+sec <- resDT |> 
+	filter(Bloom_Frequency >1) |>
+	mutate(doy2 = day_mx + Day_Diff,
+				 mx = mx - Max_Diff,
+				 cluster = x)
+
+out4 <- out3 |> 
+	group_by(year, cluster) |>
+	mutate(thr = median(CHL, na.rm = T) * 1.05)
+	
+ggplot(out4, aes(doy, CHL, colour = factor(cluster))) +
+	geom_line()  +
+	
+	facet_grid(cluster ~ year, scale = "free_y") +
+	theme_few() +
+	geom_hline(data = resPL, aes(yintercept = thr, colour = factor(cluster)), linetype = "dotted") +
+
+	scale_fill_grafify(palette = "kelly") +
+	# remove legend
+	theme(legend.position = "none") +
+	xlab("Day of the year") +
+	ylab("Chlorophyll-a concentration (mg/m3)") +
+
+		scale_colour_grafify(palette = "kelly") +
+	geom_point(data = resPL, aes(x = day_mx, y = mx), colour = "red", size = 2) +
+	geom_vline(data = resPL, aes(xintercept = day_mx),  size = 0.3, alpha = 0.3) +
+	geom_point(data = sec, aes(x = doy2, y = mx), col = "green") +
+	geom_ribbon(aes(ymin = ifelse(CHL > thr, thr, NA), ymax = CHL), fill = "grey30", alpha = 0.5) +
+	geom_segment(data = resPL, aes(x = start_doy, xend = end_doy, y = thr, yend = thr), colour = "red", size = 1) 
+
+	
+ggsave(here::here("out", paste0("06.7_bioregion_time_series_elbow7CL.png")), width = 24, height = 18, dpi = 300, bg = "white")
+
+
+	
+```
+
+
+
+# grafico metriche
+
+
+```{r}
+res_long <- 
+	resPL |> 
+	pivot_longer(cols = c(4:18))
+
+
+ggplot(res_long, aes(year, value, colour = factor(cluster))) +
+	geom_point()  +
+	geom_line(alpha = 0.5) +
+	facet_grid( name~ cluster, scale = "free_y") +
+	theme_few() +
+	
+	
+	
+	scale_fill_grafify(palette = "kelly") +
+	# remove legend
+	theme(legend.position = "bottom") +
+	xlab("Day of the year") +
+	ylab("Chlorophyll-a concentration (mg/m3)") +
+
+	scale_colour_grafify(palette = "kelly") +
+	# facet labs horizantal
+	theme(strip.text.y = element_text(angle = 0, hjust = 0.5)) 
+
+	
+ggsave(here::here("out", paste0("06.7_bioregion_time_series_metrics_elbow7CL.png")), width = 18, height = 12, dpi = 300, bg = "white")
+
+
+
+```
+
+
+# Bathymetry
+
+
+```{r}
+bat <- raster(here::here("data", "GEBCO", "gebco_2023_n85.0_s70.0_w-10.0_e60.0.tif"))
+
+batr <- crop(bat, r)
+plot(batr)
+
+
+Kr <- resample(rexint, batr, method = "ngb")
+
+
+st <- stack(Kr, batr)
+names(st) <- c("K", "bath")
+
+stdf <- as.data.frame(st, xy = TRUE) |> filter(!is.na(K))
+set.seed(345)
+stdf2 <- stdf[sample(1:nrow(stdf), 19000), ]
+
+ggplot(stdf2, aes(x = factor(K), y = bath)) +
+	geom_boxplot() 
+
+
+
+ggplot(stdf2, aes(x = factor(K), y = bath, colour = factor(K), fill = factor(K))) + 
+  ## add half-violin from {ggdist} package
+  ggdist::stat_halfeye(
+    ## custom bandwidth
+    adjust = .5, 
+    ## adjust height
+    width = .6, 
+    ## move geom to the right
+    justification = -.2, 
+    ## remove slab interval
+    .width = 0, 
+    point_colour = NA
+  ) + 
+  geom_boxplot(
+    width = .15, 
+    ## remove outliers
+    outlier.color = NA,
+    colour = "grey20",
+    fill = NA## `outlier.shape = NA` or `outlier.alpha = 0` works as well
+  ) +
+  ## add dot plots from {ggdist} package
+  ggdist::stat_dots(
+    ## orientation to the left
+    side = "left", 
+    ## move geom to the left
+    justification = 1.12, 
+    ## adjust grouping (binning) of observations 
+    binwidth = .25,
+    size = 1.1,
+    alpha = 0.3
+  ) +
+	theme_few() +
+		theme(legend.position = "none") +
+	#scale_fill_grafify()+
+	 grafify::scale_fill_grafify(palette = "kelly") +
+	grafify::scale_colour_grafify(palette = "kelly") +
+	xlab("Bioregion") +
+	ylab("Bathymetry (m)") +
+	geom_hline(yintercept = 0, linetype = "dotted", colour = "grey20") 
+ggsave(here::here("out", paste0("06.7_bioregion_bathymetry.png")), width = 6.5, height = 4.5, dpi = 300, bg = "white")
+
+
+
+
+
+
+
+```
+
+
+# correlazioni
+```{r}
+head(resPL)
+
+res2 <- resPL |> 
+	# replace -inf with NA only fo BArea       
+	mutate(BArea = ifelse(BArea == -Inf, NA, BArea),
+		BArea_total    = ifelse(BArea_total == -Inf, NA, BArea_total)		 ) |> 
+	dplyr::select(-x, -y, - cluster, - year)
+
+
+cor_matrix <- cor(res2, use = "pair")
+
+
+# Imposta le dimensioni del file di immagine in pixel
+png(file = here::here('out/06.7_correlation_matrix.png'), width = 2800, height = 2800, units = "px", pointsize = 12, bg = "white", res = 300)
+
+# Plot the correlation matrix using corrplot
+corrplot(cor_matrix, method = "square", type = "upper", order = "hclust",
+         tl.col = "black", tl.srt = 90,  # Text label color and rotation
+         addCoef.col = "grey60",  # Add correlation coefficients to the plot
+         number.cex = 0.8,  # Size of the correlation coefficients
+         number.digits = 2,  # Use two decimal places
+         number.format = "%.1f",  # Format to two decimal places
+         diag = FALSE,  # Exclude the diagonal
+         col = rev(colorRampPalette(c("red", "white", "blue"))(200)),  # Reverse the color scale
+         is.corr = FALSE)  # Tell corrplot that 'cor_matrix' contains raw correlations
+
+
+dev.off()
+
+```
+
+

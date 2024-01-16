@@ -1,0 +1,418 @@
+---
+title: "Metrics on CCI"
+format: html
+warning: false
+message: false
+# html standalone
+standalone: true
+editor: 
+  markdown: 
+    wrap: 72
+    
+---
+
+## libraries
+
+load a few libraries
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(lubridate)
+library(ggthemes)
+library(sf)
+library(ggspatial)
+library(viridis)
+library(raster)
+library(stringr)
+library(pracma)
+library(purrr)
+library(Rcpp)
+library(multidplyr)
+#library(data.table)
+library("dbscan")
+
+library(randomForest)
+library(cluster)
+library(ClustGeo)
+```
+
+```{r}
+
+
+dt <- readRDS(here::here("data", "06.3_metrics_NOTrel_DT.rds"))
+
+```
+
+```{r}
+
+dt2 <- dt |> 
+	  dplyr::select( -year) |>
+  # replace - inf with 0
+  mutate(across(everything(), ~if_else(. == -Inf, 0, .))) |>
+  # replace na with 0
+  mutate(across(everything(), ~if_else(is.na(.), 0, .))) |> 
+  # scalec
+  mutate(across(everything(), scale)) 
+
+
+  cor(dt2, use = "pairwise.complete.obs")
+corrplot::corrplot(cor(dt2, use = "pairwise.complete.obs"), method = "circle", type = "upper", tl.col = "black", tl.srt = 45)
+
+
+# quali variabili hanno una correlazione pià alta di 0.85
+cor <- cor(dt2, use = "pairwise.complete.obs")
+cor <- as.data.frame(as.table(cor))
+cor <- cor |> 
+  filter(Freq > 0.85) |> 
+  arrange(desc(Freq)) |> 
+  filter(Var1 != Var2)
+
+cor
+
+```
+
+
+rimuovo:
+
+CHL_mean_last_35
+mx
+end_doy
+
+
+uso un dataset a più bassa risoluzione
+
+
+```{r}
+rfull <- rasterFromXYZ(dt2)
+rfull
+
+myfact <- 8
+
+
+# aggregate factor 8
+r8 <- aggregate(rfull, fact = myfact, fun = mean)
+mask <- r8[[1]]
+values(mask)[!is.na(values(mask))] <- 1
+
+values(r8)[which(is.na(values(r8)))] <- 0
+
+plot(r8)
+
+```
+
+
+
+
+https://github.com/MatthieuStigler/Misc/blob/master/spatial/spatial_segmentation_field_GeoClust_demo.md
+
+
+
+## K selection
+https://statsandr.com/blog/clustering-analysis-k-means-and-hierarchical-clustering-by-hand-and-in-r/
+
+
+```{r}
+dist_rast_euclid <-  function(x)  {
+  x %>% 
+    xyFromCell(cell = 1:ncell(.))  %>% 
+    dist() 
+}
+hclustgeo_df <-  function(D0, D1 = NULL, alpha, n_obs = TRUE, k = 5) {
+  res <- hclustgeo(D0, D1, alpha = alpha) %>% 
+    cutree(k=k) %>% 
+    tibble(cluster = .)
+  if(n_obs) res <-  res %>% 
+      mutate(n_obs =   1:nrow(.)) %>% 
+      dplyr::select(n_obs, everything())
+  res
+  
+}
+
+```
+
+
+distances
+
+```{r}
+dat_dist <- dist(getValues(r8))
+geo_dist <-  dist_rast_euclid(r8)
+```
+
+
+valuto solo le variabili fenologiche 
+(https://hal.science/hal-01664018/document)
+```{r}
+myclust <- hclustgeo(dat_dist)
+plot(myclust, hang=-1,label=FALSE, xlab="",sub="", main="")
+
+length(which(myclust$height>0.1))
+
+       height <- data.frame(h = myclust$height, id = 1:length(myclust$height))
+       
+       hplot <- height |> 
+         filter(h > 0.1)
+
+barplot(hplot$h,
+  names.arg = nrow(hplot):1 # show the number of cluster below each bars
+)
+```
+
+
+
+```{r}
+k <- 3
+sub_grp <- cutree(myclust, k)
+df=as.data.frame(getValues(r8))
+
+
+
+
+# Calcolare il WSS
+wss <- sum(sapply(1:k, function(k) {
+  cluster_points <- df[sub_grp == k, ]
+  cluster_center <- colMeans(cluster_points)
+  sum(rowSums((cluster_points - cluster_center)^2))
+}))
+
+
+out <- data.frame(k = NA, wss = NA)[0, ]
+for( i in 1:15){
+  sub_grp <- cutree(myclust, i)
+  df=as.data.frame(getValues(r8))
+  # Calcolare il WSS
+  wss <- sum(sapply(1:i, function(k) {
+    cluster_points <- df[sub_grp == k, ]
+    cluster_center <- colMeans(cluster_points)
+    sum(rowSums((cluster_points - cluster_center)^2))
+  }))
+  out <- rbind(out, data.frame(k = i, wss = wss))
+}
+
+plot(out)
+
+
+```
+
+
+sembra che 7 sia il numero giusto di cluster
+
+devo trovare alpha giusto
+
+
+```{r}
+si3 <- silhouette(cutree(myclust, k = 5), # k = 4 gave the same as pam() above
+    	           dat_dist)
+
+summary(si3)$avg.width
+
+
+
+sil <- data.frame(k = NA, avg.width = NA)[0, ]
+
+for( i in 2:15){
+  si <- silhouette(cutree(myclust, k = i), dat_dist)
+
+  
+  # Calcolare il WSS
+  sil <- rbind(sil, data.frame(k = i, avg.width = summary(si)$avg.width))
+}
+
+
+ggplot(sil, aes(k, avg.width)) +
+  geom_point() 
+
+range.alpha <- seq(0,1,0.1)
+K <- 5
+cr <- choicealpha(dat_dist, geo_dist,range.alpha,K,graph=TRUE)
+cr$Q
+cr$Qnorm
+
+```
+
+
+```{r}
+ras_dat <- as.data.frame(r8, xy = TRUE) %>%  as_tibble %>% 
+  mutate(n_cell = 1:ncell(r8)) %>% 
+  dplyr::select(n_cell, everything())# %>% 
+  #rename(value = layer)
+ras_dat
+```
+
+
+```{r}
+res_alphas <- data_frame(alpha = seq(0, 1, by = 0.1)) %>% 
+  mutate(alpha_name = paste("alpha", alpha, sep="_"),
+         data = map(alpha, ~ hclustgeo_df(dat_dist, geo_dist,alpha = ., 5)))
+
+
+
+res_alphas_l <-  res_alphas %>% 
+  unnest(data) %>% 
+  left_join(ras_dat, by = c("n_obs" = "n_cell")) %>% 
+  mutate_at(c("alpha", "cluster"), as.factor) 
+
+```
+
+
+```{r}
+
+res_alphas_l_dat <-  res_alphas_l %>% 
+  filter(alpha %in% c(0, 0.1, 0.3, 0.8, 0.9, 1)) 
+
+
+pl_clus_geoSpace <- res_alphas_l_dat %>% 
+  ggplot(aes(x = x, y= y, fill = factor(cluster))) +
+  geom_tile() +
+  facet_grid(alpha ~ .) +
+  theme(legend.position = "none") +
+  ggtitle("Cluster, in geo-space") +
+  theme_few()
+
+pl_clus_geoSpace
+```
+
+
+
+
+# con climatologia
+"D:\Dropbox\R_projects\SV_phenology\data\CDS\daily_smoothed\daily_smoothed.nc"
+
+```{r}
+rfull <- stack(here::here("data", "CDS/daily_smoothed/daily_smoothed.nc"))
+rfull
+
+rdf <- as.data.frame(rfull, xy = TRUE) %>%  as_tibble %>% 
+  # replace NA with 0 fol all variables
+  mutate_at(vars(-x, -y), ~ replace_na(., 0)) 
+
+rfull <- rasterFromXYZ(rdf)
+
+
+# aggregate factor 8
+r8 <- aggregate(rfull, fact = myfact, fun = mean)
+
+plot(r8[[40:50]])
+
+```
+
+
+
+
+
+https://github.com/MatthieuStigler/Misc/blob/master/spatial/spatial_segmentation_field_GeoClust_demo.md
+
+
+
+## K selection
+https://statsandr.com/blog/clustering-analysis-k-means-and-hierarchical-clustering-by-hand-and-in-r/
+
+
+
+
+distances
+
+```{r}
+dat_dist <- dist(getValues(r8))
+geo_dist <-  dist_rast_euclid(r8)
+```
+
+
+valuto solo le variabili fenologiche 
+(https://hal.science/hal-01664018/document)
+```{r}
+myclust <- hclustgeo(dat_dist)
+plot(myclust, hang=-1,label=FALSE, xlab="",sub="", main="")
+
+length(which(myclust$height>0.1))
+
+       height <- data.frame(h = myclust$height, id = 1:length(myclust$height))
+       
+       hplot <- height |> 
+         filter(h > 0.1)
+
+barplot(hplot$h,
+  names.arg = nrow(hplot):1 # show the number of cluster below each bars
+)
+```
+
+ 
+
+
+
+
+```{r}
+si3 <- silhouette(cutree(myclust, k = 5), # k = 4 gave the same as pam() above
+    	           dat_dist)
+
+summary(si3)$avg.width
+
+
+
+sil <- data.frame(k = NA, avg.width = NA)[0, ]
+
+for( i in 2:45){
+  si <- silhouette(cutree(myclust, k = i), dat_dist)
+
+  
+  # Calcolare il WSS
+  sil <- rbind(sil, data.frame(k = i, avg.width = summary(si)$avg.width))
+}
+
+
+ggplot(sil, aes(k, avg.width)) +
+  geom_point() +
+  geom_hline(yintercept = mean(sil$avg.width), linetype = "dashed") 
+
+range.alpha <- seq(0,1,0.1)
+K <- 12
+cr <- choicealpha(dat_dist, geo_dist,range.alpha,K,graph=TRUE)
+cr$Q
+cr$Qnorm
+
+```
+
+
+```{r}
+ras_dat <- as.data.frame(r8, xy = TRUE) %>%  as_tibble %>% 
+  mutate(n_cell = 1:ncell(r8)) %>% 
+  dplyr::select(n_cell, everything())# %>% 
+  #rename(value = layer)
+ras_dat
+```
+
+
+```{r}
+res_alphas <- data_frame(alpha = seq(0, 1, by = 0.1)) %>% 
+  mutate(alpha_name = paste("alpha", alpha, sep="_"),
+         data = map(alpha, ~ hclustgeo_df(dat_dist, geo_dist,alpha = ., 12)))
+
+
+
+res_alphas_l <-  res_alphas %>% 
+  unnest(data) %>% 
+  left_join(ras_dat, by = c("n_obs" = "n_cell")) %>% 
+  mutate_at(c("alpha", "cluster"), as.factor) 
+
+```
+
+
+```{r}
+
+res_alphas_l_dat <-  res_alphas_l %>% 
+  filter(alpha %in% c(0, 0.1, 0.3, 0.4, 0.8, 0.9, 1)) 
+
+
+pl_clus_geoSpace <- res_alphas_l_dat %>% 
+  ggplot(aes(x = x, y= y, fill = factor(cluster))) +
+  geom_tile() +
+  facet_grid(alpha ~ .) +
+  theme(legend.position = "none") +
+  ggtitle("Cluster, in geo-space") +
+  theme_few()
+
+pl_clus_geoSpace
+```
+
+
